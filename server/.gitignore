@@ -1,0 +1,20 @@
+# Local environment config (see .env.example)
+.env
+
+# Go build output
+/bin/
+/server
+*.exe
+*.test
+*.out
+
+# Test coverage
+coverage.out
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
