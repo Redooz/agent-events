@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "auth-sec": {
+      "source": "yaklang/hack-skills",
+      "sourceType": "github",
+      "skillPath": "skills/auth-sec/SKILL.md",
+      "computedHash": "5f1b3fc7651eecd7817ee7e0db25b4dfbf0e555ebd19292439eb77143d67a12f"
+    }
+  }
+}

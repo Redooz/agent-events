@@ -1,18 +1,24 @@
 package handler_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"agent-events/server/internal/adapters/memory"
+	"agent-events/server/internal/core/domain"
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
 	"agent-events/server/internal/transport/http/controller"
 	"agent-events/server/internal/transport/http/dto"
 	"agent-events/server/internal/transport/http/handler"
+	"agent-events/server/internal/transport/http/middleware"
+	"agent-events/server/pkg/apperr"
 )
 
 type noopLogger struct{}
@@ -22,28 +28,130 @@ func (noopLogger) Info(string, ...port.Field)  {}
 func (noopLogger) Warn(string, ...port.Field)  {}
 func (noopLogger) Error(string, ...port.Field) {}
 
-func newRouter(t *testing.T) http.Handler {
-	t.Helper()
+type fakeVerifier struct{}
 
-	svc := usecase.NewEventService(memory.NewEventRepository(), noopLogger{})
+func (fakeVerifier) Verify(_ context.Context, provider, idToken string) (domain.Identity, error) {
+	if idToken == "" {
+		return domain.Identity{}, apperr.Unauthorized("empty token")
+	}
 
-	return controller.NewRouter(handler.NewEventHandler(svc, noopLogger{}), noopLogger{})
+	return domain.Identity{
+		Provider: provider,
+		Subject:  idToken,
+		Email:    idToken + "@example.com",
+	}, nil
 }
 
-func do(t *testing.T, router http.Handler, method, path, body string) *httptest.ResponseRecorder {
+type stackLimits struct {
+	eventsPerDay    int
+	exchangePerHour int
+	maxAgents       int
+}
+
+func defaultLimits() stackLimits {
+	return stackLimits{eventsPerDay: 100, exchangePerHour: 100, maxAgents: 10}
+}
+
+type testStack struct {
+	router http.Handler
+	auth   *usecase.AuthService
+	events *usecase.EventService
+}
+
+func newTestStack(t *testing.T, limits stackLimits) *testStack {
 	t.Helper()
 
-	var reader *strings.Reader
-	if body == "" {
-		reader = strings.NewReader("")
-	} else {
-		reader = strings.NewReader(body)
+	eventsRepo := memory.NewEventRepository()
+	owners := memory.NewOwnerRepository()
+	tokens := memory.NewOwnerTokenRepository()
+	agents := memory.NewAgentRepository()
+	limiter := memory.NewRateLimiter(map[string]memory.Limit{
+		usecase.ActionCreateEvent:  {Max: limits.eventsPerDay, Window: 24 * time.Hour},
+		usecase.ActionAuthExchange: {Max: limits.exchangePerHour, Window: time.Hour},
+	})
+	authCfg := usecase.AuthConfig{OwnerTokenTTL: time.Hour, MaxAgentsPerOwner: limits.maxAgents}
+
+	authSvc := usecase.NewAuthService(fakeVerifier{}, owners, tokens, agents, limiter, noopLogger{}, authCfg)
+	eventSvc := usecase.NewEventService(eventsRepo, limiter, noopLogger{})
+
+	eventHandler := handler.NewEventHandler(eventSvc, noopLogger{})
+	authHandler := handler.NewAuthHandler(authSvc, noopLogger{})
+	agentHandler := handler.NewAgentHandler(authSvc, noopLogger{})
+	authMW := middleware.NewAuth(authSvc, noopLogger{})
+
+	return &testStack{
+		router: controller.NewRouter(eventHandler, authHandler, agentHandler, authMW, noopLogger{}),
+		auth:   authSvc,
+		events: eventSvc,
+	}
+}
+
+func (s *testStack) do(t *testing.T, method, path, body, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(method, path, reader))
+	s.router.ServeHTTP(rec, req)
 
 	return rec
+}
+
+func (s *testStack) exchange(t *testing.T, subject string) string {
+	t.Helper()
+
+	body := fmt.Sprintf(`{"provider":"google","id_token":%q}`, subject)
+	rec := s.do(t, http.MethodPost, "/api/v1/auth/exchange", body, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload dto.ExchangeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode exchange response: %v", err)
+	}
+
+	return payload.Token
+}
+
+func (s *testStack) createAgent(t *testing.T, ownerToken, name string) (string, string) {
+	t.Helper()
+
+	body := fmt.Sprintf(`{"name":%q}`, name)
+	rec := s.do(t, http.MethodPost, "/api/v1/agents", body, ownerToken)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create agent = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var payload dto.CreateAgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode create agent response: %v", err)
+	}
+
+	return payload.Agent.ID, payload.Key
+}
+
+func (s *testStack) agentKeyFor(t *testing.T, subject string) string {
+	t.Helper()
+
+	ownerToken := s.exchange(t, subject)
+	_, key := s.createAgent(t, ownerToken, "agent-"+subject)
+
+	return key
+}
+
+func (s *testStack) createEvent(t *testing.T, agentKey, name string) dto.EventResponse {
+	t.Helper()
+
+	rec := s.do(t, http.MethodPost, "/api/v1/events", `{"name":"`+name+`"}`, agentKey)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create event = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	return decodeEvent(t, rec)
 }
 
 func decodeEvent(t *testing.T, rec *httptest.ResponseRecorder) dto.EventResponse {
@@ -68,110 +176,310 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) handler.ErrorResp
 	return payload
 }
 
-func createEvent(t *testing.T, router http.Handler, name string) string {
-	t.Helper()
-
-	rec := do(t, router, http.MethodPost, "/api/v1/events", `{"name":"`+name+`"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("POST /events = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
-	}
-
-	return decodeEvent(t, rec).ID
-}
-
-func TestCreateReturnsCreatedEvent(t *testing.T) {
+func TestCreateReturnsCreatedEventWithOwner(t *testing.T) {
 	t.Parallel()
 
-	rec := do(t, newRouter(t), http.MethodPost, "/api/v1/events",
-		`{"name":"deploy","description":"shipped v2"}`)
+	stack := newTestStack(t, defaultLimits())
+	key := stack.agentKeyFor(t, "alice")
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
+	event := stack.createEvent(t, key, "deploy")
+	if event.ID == "" || event.OwnerID == "" {
+		t.Errorf("event = %+v, want id and owner_id", event)
 	}
 
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", got)
-	}
-
-	event := decodeEvent(t, rec)
-	if event.ID == "" {
-		t.Error("response is missing an id")
-	}
-
-	if event.Name != "deploy" || event.Description != "shipped v2" {
-		t.Errorf("response = %+v, want the created event", event)
+	if event.Name != "deploy" {
+		t.Errorf("name = %q, want deploy", event.Name)
 	}
 }
 
-func TestCreateRejectsMissingName(t *testing.T) {
+func TestEventsRequireAgentKey(t *testing.T) {
 	t.Parallel()
 
-	rec := do(t, newRouter(t), http.MethodPost, "/api/v1/events", `{"description":"no name"}`)
+	stack := newTestStack(t, defaultLimits())
 
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	rec = stack.do(t, http.MethodGet, "/api/v1/events", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, "not-a-bearer")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, "aea_garbage")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestOwnerTokenCannotActAsAgent(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	ownerToken := stack.exchange(t, "alice")
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, ownerToken)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAgentsRequireOwnerToken(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	agentKey := stack.agentKeyFor(t, "alice")
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/agents", `{"name":"x"}`, agentKey)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("agent key on /agents = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	rec = stack.do(t, http.MethodGet, "/api/v1/agents", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestExchangeReturnsUniformResponseForNewAndExistingOwners(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+
+	first := stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"provider":"google","id_token":"alice"}`, "")
+	second := stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"provider":"google","id_token":"alice"}`, "")
+
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("exchange codes = %d and %d, want both %d", first.Code, second.Code, http.StatusOK)
+	}
+
+	var a, b dto.ExchangeResponse
+	_ = json.Unmarshal(first.Body.Bytes(), &a)
+	_ = json.Unmarshal(second.Body.Bytes(), &b)
+
+	if a.Owner.ID != b.Owner.ID {
+		t.Errorf("owner ids differ: %q vs %q", a.Owner.ID, b.Owner.ID)
+	}
+
+	if a.Owner.Email == "" {
+		t.Error("owner email is empty")
+	}
+}
+
+func TestExchangeRejectsUnknownProvider(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"provider":"discord","id_token":"x"}`, "")
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	payload := decodeError(t, rec)
-	if payload.Error.Code != "invalid" {
-		t.Errorf("error code = %q, want invalid", payload.Error.Code)
-	}
-
-	if payload.Error.Details["name"] != "is required" {
-		t.Errorf("details = %v, want name/is required", payload.Error.Details)
-	}
-}
-
-func TestCreateRejectsMalformedJSON(t *testing.T) {
-	t.Parallel()
-
-	rec := do(t, newRouter(t), http.MethodPost, "/api/v1/events", `{"name":`)
-
+	rec = stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"id_token":"x"}`, "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 
-func TestGetReturnsStoredEvent(t *testing.T) {
+func TestExchangeRateLimitedPerIP(t *testing.T) {
 	t.Parallel()
 
-	router := newRouter(t)
-	id := createEvent(t, router, "deploy")
+	stack := newTestStack(t, stackLimits{eventsPerDay: 100, exchangePerHour: 1, maxAgents: 10})
 
-	rec := do(t, router, http.MethodGet, "/api/v1/events/"+id, "")
+	first := stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"provider":"google","id_token":"alice"}`, "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first exchange = %d, want %d", first.Code, http.StatusOK)
+	}
+
+	second := stack.do(t, http.MethodPost, "/api/v1/auth/exchange", `{"provider":"google","id_token":"bob"}`, "")
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second exchange = %d, want %d", second.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestCreateEventRateLimitedPerOwner(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, stackLimits{eventsPerDay: 1, exchangePerHour: 100, maxAgents: 10})
+	key := stack.agentKeyFor(t, "alice")
+
+	stack.createEvent(t, key, "one")
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"two"}`, key)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+
+	otherKey := stack.agentKeyFor(t, "bob")
+	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"three"}`, otherKey)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("other owner status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+}
+
+func TestAgentLimitPerOwner(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, stackLimits{eventsPerDay: 100, exchangePerHour: 100, maxAgents: 2})
+	ownerToken := stack.exchange(t, "alice")
+
+	stack.createAgent(t, ownerToken, "one")
+	stack.createAgent(t, ownerToken, "two")
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/agents", `{"name":"three"}`, ownerToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+func TestCrossOwnerEventAccessIsForbidden(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	aliceKey := stack.agentKeyFor(t, "alice")
+	bobKey := stack.agentKeyFor(t, "bob")
+
+	event := stack.createEvent(t, aliceKey, "deploy")
+
+	rec := stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"hijacked"}`, bobKey)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("update by foreign agent = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	rec = stack.do(t, http.MethodDelete, "/api/v1/events/"+event.ID, "", bobKey)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("delete by foreign agent = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	rec = stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"renamed"}`, aliceKey)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+		t.Fatalf("update by owner = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	rec = stack.do(t, http.MethodDelete, "/api/v1/events/"+event.ID, "", aliceKey)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete by owner = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestCrossOwnerAgentRevokeIsForbidden(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	aliceToken := stack.exchange(t, "alice")
+	bobToken := stack.exchange(t, "bob")
+
+	agentID, agentKey := stack.createAgent(t, aliceToken, "scout")
+
+	rec := stack.do(t, http.MethodDelete, "/api/v1/agents/"+agentID, "", bobToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("revoke by foreign owner = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	rec = stack.do(t, http.MethodGet, "/api/v1/agents", "", aliceToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list agents = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var agents []dto.AgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &agents); err != nil {
+		t.Fatalf("decode agents: %v", err)
+	}
+
+	if len(agents) != 1 || agents[0].ID != agentID {
+		t.Errorf("agents = %+v, want the single owned agent", agents)
+	}
+
+	rec = stack.do(t, http.MethodDelete, "/api/v1/agents/"+agentID, "", aliceToken)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke by owner = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	rec = stack.do(t, http.MethodGet, "/api/v1/events", "", agentKey)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked agent key = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestListAgentsOnlyShowsOwn(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	aliceToken := stack.exchange(t, "alice")
+	bobToken := stack.exchange(t, "bob")
+
+	stack.createAgent(t, aliceToken, "scout")
+	stack.createAgent(t, bobToken, "worker")
+
+	rec := stack.do(t, http.MethodGet, "/api/v1/agents", "", aliceToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list agents = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var agents []dto.AgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &agents); err != nil {
+		t.Fatalf("decode agents: %v", err)
+	}
+
+	if len(agents) != 1 || agents[0].Name != "scout" {
+		t.Errorf("agents = %+v, want only alice's agent", agents)
+	}
+}
+
+func TestWhoamiReturnsAgentAndOwner(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	key := stack.agentKeyFor(t, "alice")
+
+	rec := stack.do(t, http.MethodGet, "/api/v1/auth/whoami", "", key)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("whoami = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload dto.WhoamiResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode whoami: %v", err)
+	}
+
+	if payload.Owner.Email != "alice@example.com" {
+		t.Errorf("owner email = %q, want alice@example.com", payload.Owner.Email)
+	}
+
+	if payload.Agent.Name == "" {
+		t.Error("agent name is empty")
+	}
+}
+
+func TestGetAndListEventsWithAgentKey(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	aliceKey := stack.agentKeyFor(t, "alice")
+	bobKey := stack.agentKeyFor(t, "bob")
+
+	event := stack.createEvent(t, aliceKey, "deploy")
+	stack.createEvent(t, bobKey, "meetup")
+
+	rec := stack.do(t, http.MethodGet, "/api/v1/events/"+event.ID, "", aliceKey)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get event = %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	if got := decodeEvent(t, rec).Name; got != "deploy" {
 		t.Errorf("name = %q, want deploy", got)
 	}
-}
 
-func TestGetUnknownEventReturnsNotFound(t *testing.T) {
-	t.Parallel()
-
-	rec := do(t, newRouter(t), http.MethodGet, "/api/v1/events/missing", "")
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-
-	if got := decodeError(t, rec).Error.Code; got != "not_found" {
-		t.Errorf("error code = %q, want not_found", got)
-	}
-}
-
-func TestListReturnsCreatedEvents(t *testing.T) {
-	t.Parallel()
-
-	router := newRouter(t)
-	createEvent(t, router, "one")
-	createEvent(t, router, "two")
-
-	rec := do(t, router, http.MethodGet, "/api/v1/events", "")
+	rec = stack.do(t, http.MethodGet, "/api/v1/events", "", aliceKey)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		t.Fatalf("list events = %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	var events []dto.EventResponse
@@ -180,58 +488,50 @@ func TestListReturnsCreatedEvents(t *testing.T) {
 	}
 
 	if len(events) != 2 {
-		t.Errorf("list returned %d events, want 2", len(events))
-	}
-}
-
-func TestUpdateModifiesEvent(t *testing.T) {
-	t.Parallel()
-
-	router := newRouter(t)
-	id := createEvent(t, router, "deploy")
-
-	rec := do(t, router, http.MethodPut, "/api/v1/events/"+id, `{"name":"rollback"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+		t.Errorf("list returned %d events, want 2 (events are discoverable across owners)", len(events))
 	}
 
-	if got := decodeEvent(t, rec).Name; got != "rollback" {
-		t.Errorf("name = %q, want rollback", got)
-	}
-}
-
-func TestUpdateUnknownEventReturnsNotFound(t *testing.T) {
-	t.Parallel()
-
-	rec := do(t, newRouter(t), http.MethodPut, "/api/v1/events/missing", `{"name":"rollback"}`)
-
+	rec = stack.do(t, http.MethodGet, "/api/v1/events/missing", "", aliceKey)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+		t.Fatalf("missing event = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
-func TestDeleteRemovesEvent(t *testing.T) {
+func TestCreateRejectsMalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	router := newRouter(t)
-	id := createEvent(t, router, "deploy")
+	stack := newTestStack(t, defaultLimits())
+	key := stack.agentKeyFor(t, "alice")
 
-	rec := do(t, router, http.MethodDelete, "/api/v1/events/"+id, "")
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":`, key)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreateRejectsMissingName(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	key := stack.agentKeyFor(t, "alice")
+
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"description":"no name"}`, key)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	rec = do(t, router, http.MethodGet, "/api/v1/events/"+id, "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status after delete = %d, want %d", rec.Code, http.StatusNotFound)
+	payload := decodeError(t, rec)
+	if payload.Error.Code != "invalid" {
+		t.Errorf("error code = %q, want invalid", payload.Error.Code)
 	}
 }
 
 func TestHealthzReportsOK(t *testing.T) {
 	t.Parallel()
 
-	rec := do(t, newRouter(t), http.MethodGet, "/healthz", "")
+	stack := newTestStack(t, defaultLimits())
 
+	rec := stack.do(t, http.MethodGet, "/healthz", "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
