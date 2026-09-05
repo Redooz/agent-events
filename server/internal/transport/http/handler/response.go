@@ -18,6 +18,19 @@ type ErrorResponse struct {
 	Error ErrorBody `json:"error"`
 }
 
+const maxBodySize = 1 << 20
+
+func DecodeJSON(w http.ResponseWriter, r *http.Request, log port.Logger, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		WriteError(w, log, apperr.Invalid("request body must be valid JSON"))
+		return false
+	}
+
+	return true
+}
+
 func WriteJSON(w http.ResponseWriter, status int, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -60,6 +73,12 @@ func StatusCode(err error) int {
 		return http.StatusNotFound
 	case apperr.KindInvalid:
 		return http.StatusBadRequest
+	case apperr.KindUnauthorized:
+		return http.StatusUnauthorized
+	case apperr.KindForbidden:
+		return http.StatusForbidden
+	case apperr.KindTooMany:
+		return http.StatusTooManyRequests
 	default:
 		return http.StatusInternalServerError
 	}

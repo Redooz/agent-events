@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: all build run test lint fmt tidy
+.PHONY: all build run test lint fmt tidy db-up db-down
 
 all: lint test build
 
@@ -21,3 +21,9 @@ fmt:
 
 tidy:
 	$(GO) mod tidy
+
+db-up:
+	docker compose up -d postgres
+
+db-down:
+	docker compose down

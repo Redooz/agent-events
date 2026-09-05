@@ -8,9 +8,12 @@ import (
 type Kind string
 
 const (
-	KindNotFound Kind = "not_found"
-	KindInvalid  Kind = "invalid"
-	KindInternal Kind = "internal"
+	KindNotFound     Kind = "not_found"
+	KindInvalid      Kind = "invalid"
+	KindUnauthorized Kind = "unauthorized"
+	KindForbidden    Kind = "forbidden"
+	KindTooMany      Kind = "too_many"
+	KindInternal     Kind = "internal"
 )
 
 type Error struct {
@@ -27,6 +30,12 @@ func New(kind Kind, message string) *Error {
 func NotFound(message string) *Error { return New(KindNotFound, message) }
 
 func Invalid(message string) *Error { return New(KindInvalid, message) }
+
+func Unauthorized(message string) *Error { return New(KindUnauthorized, message) }
+
+func Forbidden(message string) *Error { return New(KindForbidden, message) }
+
+func TooMany(message string) *Error { return New(KindTooMany, message) }
 
 func Wrap(err error, message string) *Error {
 	return &Error{Kind: KindInternal, Message: message, Err: err}

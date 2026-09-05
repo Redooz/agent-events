@@ -20,6 +20,7 @@ type UpdateEventRequest struct {
 
 type EventResponse struct {
 	ID          string    `json:"id"`
+	OwnerID     string    `json:"owner_id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -29,6 +30,7 @@ type EventResponse struct {
 func NewEventResponse(event domain.Event) EventResponse {
 	return EventResponse{
 		ID:          event.ID,
+		OwnerID:     event.OwnerID,
 		Name:        event.Name,
 		Description: event.Description,
 		CreatedAt:   event.CreatedAt,

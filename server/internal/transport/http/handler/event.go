@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,14 +8,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/transport/http/authctx"
 	"agent-events/server/internal/transport/http/dto"
 	"agent-events/server/pkg/apperr"
 )
-
-const maxBodySize = 1 << 20
 
 type EventHandler struct {
 	svc      *usecase.EventService
@@ -42,7 +41,7 @@ func (h *EventHandler) Register(r chi.Router) {
 
 func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req dto.CreateEventRequest
-	if !h.decode(w, r, &req) {
+	if !DecodeJSON(w, r, h.log, &req) {
 		return
 	}
 
@@ -51,7 +50,13 @@ func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Create(r.Context(), req.ToInput())
+	actor, ok := authctx.AgentFrom(r.Context())
+	if !ok {
+		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
+		return
+	}
+
+	event, err := h.svc.Create(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -61,7 +66,13 @@ func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventHandler) get(w http.ResponseWriter, r *http.Request) {
-	event, err := h.svc.Get(r.Context(), chi.URLParam(r, "id"))
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	event, err := h.svc.Get(r.Context(), id)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -82,7 +93,7 @@ func (h *EventHandler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 	var req dto.UpdateEventRequest
-	if !h.decode(w, r, &req) {
+	if !DecodeJSON(w, r, h.log, &req) {
 		return
 	}
 
@@ -91,7 +102,19 @@ func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Update(r.Context(), chi.URLParam(r, "id"), req.ToInput())
+	actor, ok := authctx.AgentFrom(r.Context())
+	if !ok {
+		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
+		return
+	}
+
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	event, err := h.svc.Update(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -101,7 +124,19 @@ func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+	actor, ok := authctx.AgentFrom(r.Context())
+	if !ok {
+		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
+		return
+	}
+
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}
@@ -109,15 +144,13 @@ func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *EventHandler) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
-
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		WriteError(w, h.log, apperr.Invalid("request body must be valid JSON"))
-		return false
+func eventURLID(r *http.Request) (string, error) {
+	id := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(id); err != nil {
+		return "", apperr.NotFound("event not found")
 	}
 
-	return true
+	return id, nil
 }
 
 func validationError(err error) error {
