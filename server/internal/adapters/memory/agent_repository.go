@@ -17,13 +17,24 @@ func NewAgentRepository() *AgentRepository {
 	return &AgentRepository{agents: make(map[string]domain.Agent)}
 }
 
-func (r *AgentRepository) Create(_ context.Context, agent domain.Agent) error {
+func (r *AgentRepository) CreateIfUnderLimit(_ context.Context, agent domain.Agent, max int) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	count := 0
+	for _, existing := range r.agents {
+		if existing.OwnerID == agent.OwnerID && existing.RevokedAt.IsZero() {
+			count++
+		}
+	}
+
+	if count >= max {
+		return false, nil
+	}
+
 	r.agents[agent.ID] = agent
 
-	return nil
+	return true, nil
 }
 
 func (r *AgentRepository) Get(_ context.Context, id string) (domain.Agent, error) {
@@ -63,20 +74,6 @@ func (r *AgentRepository) ListByOwner(_ context.Context, ownerID string) ([]doma
 	}
 
 	return agents, nil
-}
-
-func (r *AgentRepository) CountByOwner(_ context.Context, ownerID string) (int, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	count := 0
-	for _, agent := range r.agents {
-		if agent.OwnerID == ownerID {
-			count++
-		}
-	}
-
-	return count, nil
 }
 
 func (r *AgentRepository) Revoke(_ context.Context, id string, revokedAt time.Time) error {

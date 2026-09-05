@@ -108,7 +108,7 @@ func scanEvent(row interface{ Scan(dest ...any) error }) (domain.Event, error) {
 	var event domain.Event
 
 	if err := row.Scan(&event.ID, &event.OwnerID, &event.Name, &event.Description, &event.CreatedAt, &event.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || isInvalidInputSyntax(err) {
 			return domain.Event{}, domain.ErrEventNotFound
 		}
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,8 @@ type Config struct {
 
 	RateLimitEventsPerDay    int
 	RateLimitExchangePerHour int
+
+	TrustedProxies []*net.IPNet
 }
 
 func Load() (Config, error) {
@@ -43,6 +46,11 @@ func Load() (Config, error) {
 	v.SetDefault("rate_limit_events_per_day", 20)
 	v.SetDefault("rate_limit_exchange_per_hour", 30)
 
+	trustedProxies, err := parseTrustedProxies(v.GetString("trusted_proxies"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Port:              v.GetString("port"),
 		Env:               strings.ToLower(v.GetString("env")),
@@ -57,6 +65,8 @@ func Load() (Config, error) {
 
 		RateLimitEventsPerDay:    v.GetInt("rate_limit_events_per_day"),
 		RateLimitExchangePerHour: v.GetInt("rate_limit_exchange_per_hour"),
+
+		TrustedProxies: trustedProxies,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -72,13 +82,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("PORT must be a number between 1 and 65535, got %q", c.Port)
 	}
 
+	if !c.IsDevelopment() {
+		if c.GoogleClientID == "" && c.AppleClientID == "" && c.MicrosoftClientID == "" {
+			return fmt.Errorf("at least one identity provider client id (GOOGLE_CLIENT_ID, APPLE_CLIENT_ID, MICROSOFT_CLIENT_ID) is required outside development")
+		}
+	}
+
 	if c.IsProduction() {
 		if c.DatabaseURL == "" {
 			return fmt.Errorf("DATABASE_URL is required in production")
-		}
-
-		if c.GoogleClientID == "" && c.AppleClientID == "" && c.MicrosoftClientID == "" {
-			return fmt.Errorf("at least one identity provider client id (GOOGLE_CLIENT_ID, APPLE_CLIENT_ID, MICROSOFT_CLIENT_ID) is required in production")
 		}
 	}
 
@@ -103,4 +115,49 @@ func (c Config) Validate() error {
 
 func (c Config) IsProduction() bool {
 	return c.Env == "production"
+}
+
+func (c Config) IsDevelopment() bool {
+	return c.Env == "development"
+}
+
+func parseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	networks := make([]*net.IPNet, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if !strings.Contains(part, "/") {
+			ip := net.ParseIP(part)
+			if ip == nil {
+				return nil, fmt.Errorf("TRUSTED_PROXIES entry %q is not a valid IP or CIDR range", part)
+			}
+
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+
+			networks = append(networks, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+
+			continue
+		}
+
+		_, network, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("TRUSTED_PROXIES entry %q is not a valid IP or CIDR range", part)
+		}
+
+		networks = append(networks, network)
+	}
+
+	return networks, nil
 }

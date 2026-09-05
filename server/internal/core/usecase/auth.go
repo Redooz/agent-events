@@ -19,6 +19,8 @@ const (
 
 	tokenPrefixOwner = "aeo_"
 	tokenPrefixAgent = "aea_"
+
+	agentTouchInterval = time.Minute
 )
 
 type AuthConfig struct {
@@ -139,7 +141,7 @@ func (s *AuthService) Exchange(ctx context.Context, in ExchangeInput) (ExchangeR
 }
 
 func (s *AuthService) AuthenticateOwner(ctx context.Context, rawToken string) (domain.Owner, error) {
-	token, err := s.tokens.GetByHash(ctx, hashToken(rawToken))
+	token, err := s.tokens.GetByHash(ctx, HashToken(rawToken))
 	switch {
 	case errors.Is(err, domain.ErrOwnerTokenNotFound):
 		return domain.Owner{}, apperr.Unauthorized("invalid or expired owner token")
@@ -164,8 +166,17 @@ func (s *AuthService) AuthenticateOwner(ctx context.Context, rawToken string) (d
 	return owner, nil
 }
 
+func (s *AuthService) RevokeOwnerToken(ctx context.Context, tokenHash string) error {
+	if err := s.tokens.DeleteByHash(ctx, tokenHash); err != nil {
+		s.logger.Error("failed to revoke owner token", port.Err(err))
+		return apperr.Wrap(err, "could not log out")
+	}
+
+	return nil
+}
+
 func (s *AuthService) AuthenticateAgent(ctx context.Context, rawKey string) (AgentCredentials, error) {
-	agent, err := s.agents.GetByKeyHash(ctx, hashToken(rawKey))
+	agent, err := s.agents.GetByKeyHash(ctx, HashToken(rawKey))
 	switch {
 	case errors.Is(err, domain.ErrAgentNotFound):
 		return AgentCredentials{}, apperr.Unauthorized("invalid agent key")
@@ -189,25 +200,17 @@ func (s *AuthService) AuthenticateAgent(ctx context.Context, rawKey string) (Age
 		return AgentCredentials{}, apperr.Wrap(err, "could not authenticate")
 	}
 
-	if err := s.agents.TouchLastUsed(ctx, agent.ID, time.Now().UTC()); err != nil {
-		s.logger.Warn("failed to touch agent last used", port.Err(err), port.Str("agent_id", agent.ID))
+	now := time.Now().UTC()
+	if agent.LastUsedAt.IsZero() || now.Sub(agent.LastUsedAt) >= agentTouchInterval {
+		if err := s.agents.TouchLastUsed(ctx, agent.ID, now); err != nil {
+			s.logger.Warn("failed to touch agent last used", port.Err(err), port.Str("agent_id", agent.ID))
+		}
 	}
 
 	return AgentCredentials{Agent: agent, Owner: owner}, nil
 }
 
 func (s *AuthService) CreateAgent(ctx context.Context, ownerID, name string) (AgentWithKey, error) {
-	count, err := s.agents.CountByOwner(ctx, ownerID)
-	if err != nil {
-		s.logger.Error("failed to count agents", port.Err(err), port.Str("owner_id", ownerID))
-		return AgentWithKey{}, apperr.Wrap(err, "could not create agent")
-	}
-
-	if count >= s.config.MaxAgentsPerOwner {
-		s.logger.Warn("agent limit reached", port.Str("owner_id", ownerID), port.Int("count", count))
-		return AgentWithKey{}, apperr.Forbidden("agent limit reached, revoke an agent first")
-	}
-
 	agent := domain.Agent{
 		ID:        newID(),
 		OwnerID:   ownerID,
@@ -228,9 +231,15 @@ func (s *AuthService) CreateAgent(ctx context.Context, ownerID, name string) (Ag
 
 	agent.KeyHash = hash
 
-	if err := s.agents.Create(ctx, agent); err != nil {
+	created, err := s.agents.CreateIfUnderLimit(ctx, agent, s.config.MaxAgentsPerOwner)
+	if err != nil {
 		s.logger.Error("failed to store agent", port.Err(err), port.Str("owner_id", ownerID))
 		return AgentWithKey{}, apperr.Wrap(err, "could not create agent")
+	}
+
+	if !created {
+		s.logger.Warn("agent limit reached", port.Str("owner_id", ownerID), port.Int("max_agents", s.config.MaxAgentsPerOwner))
+		return AgentWithKey{}, apperr.Forbidden("agent limit reached, revoke an agent first")
 	}
 
 	s.logger.Info("agent created", port.Str("agent_id", agent.ID), port.Str("owner_id", ownerID))
@@ -289,10 +298,10 @@ func newToken(prefix string) (string, string, error) {
 
 	raw := prefix + base64.RawURLEncoding.EncodeToString(b)
 
-	return raw, hashToken(raw), nil
+	return raw, HashToken(raw), nil
 }
 
-func hashToken(raw string) string {
+func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 
 	return hex.EncodeToString(sum[:])

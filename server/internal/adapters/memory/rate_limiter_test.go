@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -90,5 +91,24 @@ func TestRateLimiterUnlimitedAction(t *testing.T) {
 
 	if !allowed {
 		t.Error("Allow() unconfigured action = false, want true")
+	}
+}
+
+func TestRateLimiterMapStaysBoundedUnderFlood(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	rl := NewRateLimiter(map[string]Limit{
+		"auth.exchange": {Max: 1, Window: time.Hour},
+	})
+	rl.now = func() time.Time { return now }
+
+	flood := maxTrackedBuckets * 4
+	for i := 0; i < flood; i++ {
+		if _, err := rl.Allow(context.Background(), fmt.Sprintf("ip:%d", i), "auth.exchange"); err != nil {
+			t.Fatalf("Allow() #%d error = %v, want nil", i+1, err)
+		}
+	}
+
+	if len(rl.counts) > maxTrackedBuckets {
+		t.Errorf("tracked buckets = %d, want at most %d", len(rl.counts), maxTrackedBuckets)
 	}
 }

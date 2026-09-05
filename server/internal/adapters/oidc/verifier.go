@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"agent-events/server/internal/core/domain"
@@ -20,8 +21,9 @@ type Verifier struct {
 	byProvider map[string]verifyFunc
 }
 
-func New(ctx context.Context, googleClientID, appleClientID, microsoftClientID, microsoftTenant string) (*Verifier, error) {
+func New(ctx context.Context, allowDevVerifier bool, googleClientID, appleClientID, microsoftClientID, microsoftTenant string) (*Verifier, error) {
 	return newWithOptions(ctx, providerOptions{
+		allowDevVerifier:  allowDevVerifier,
 		googleClientID:    googleClientID,
 		googleIssuer:      googleIssuer,
 		appleClientID:     appleClientID,
@@ -33,6 +35,7 @@ func New(ctx context.Context, googleClientID, appleClientID, microsoftClientID, 
 }
 
 type providerOptions struct {
+	allowDevVerifier  bool
 	googleClientID    string
 	googleIssuer      string
 	appleClientID     string
@@ -73,6 +76,10 @@ func newWithOptions(ctx context.Context, opts providerOptions) (*Verifier, error
 	}
 
 	if len(byProvider) == 0 {
+		if !opts.allowDevVerifier {
+			return nil, errors.New("no identity provider client id is configured and the dev verifier is not allowed in this environment")
+		}
+
 		dev := devVerifier{}
 		for _, provider := range domain.Providers {
 			p := provider

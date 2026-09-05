@@ -75,7 +75,7 @@ func newTestStack(t *testing.T, limits stackLimits) *testStack {
 	eventSvc := usecase.NewEventService(eventsRepo, limiter, noopLogger{})
 
 	eventHandler := handler.NewEventHandler(eventSvc, noopLogger{})
-	authHandler := handler.NewAuthHandler(authSvc, noopLogger{})
+	authHandler := handler.NewAuthHandler(authSvc, noopLogger{}, nil)
 	agentHandler := handler.NewAgentHandler(authSvc, noopLogger{})
 	authMW := middleware.NewAuth(authSvc, noopLogger{})
 
@@ -494,6 +494,34 @@ func TestGetAndListEventsWithAgentKey(t *testing.T) {
 	rec = stack.do(t, http.MethodGet, "/api/v1/events/missing", "", aliceKey)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing event = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestMalformedIDsReturnNotFound(t *testing.T) {
+	t.Parallel()
+
+	stack := newTestStack(t, defaultLimits())
+	key := stack.agentKeyFor(t, "alice")
+	ownerToken := stack.exchange(t, "alice")
+
+	rec := stack.do(t, http.MethodGet, "/api/v1/events/not-a-uuid", "", key)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	rec = stack.do(t, http.MethodPut, "/api/v1/events/not-a-uuid", `{"name":"x"}`, key)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("update event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	rec = stack.do(t, http.MethodDelete, "/api/v1/events/not-a-uuid", "", key)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	rec = stack.do(t, http.MethodDelete, "/api/v1/agents/not-a-uuid", "", ownerToken)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("revoke agent with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

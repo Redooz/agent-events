@@ -35,18 +35,23 @@ Adding a component: write it against a `port` interface, provide the impl in `fx
 Two credentials, both opaque random tokens stored SHA-256 hashed (plaintext never persisted):
 
 - Owner token (`aeo_…`) — issued by `POST /api/v1/auth/exchange` after verifying a provider ID
-  token. Authorizes agent management via `middleware.Auth.RequireOwner`.
+  token. Authorizes agent management via `middleware.Auth.RequireOwner`; revoked by the owner
+  through `DELETE /api/v1/auth/session` (logout).
 - Agent key (`aea_…`) — minted by owners, revocable. Authorizes everything else via `RequireAgent`;
   requests act as "agent on behalf of owner" (`usecase.Actor` carries OwnerID + AgentID).
 
 Storage mode: `DATABASE_URL` set → Postgres (goose migrations run automatically at startup);
-unset → in-memory, data lost on restart (dev/test only). In development with no provider client
-IDs configured, a dev verifier accepts any token string as identity; production requires
-`DATABASE_URL` and at least one `*_CLIENT_ID` (enforced in `config.Validate`).
+unset → in-memory, data lost on restart (dev/test only). The dev verifier that accepts any token
+string as identity is allowed only in `ENV=development` (wired via `oidc.New`'s `allowDevVerifier`);
+every other env requires at least one `*_CLIENT_ID` (enforced in `config.Validate` and at startup).
+Expired owner tokens are purged by an hourly cleanup loop (`provideOwnerTokenCleanup` in `main.go`),
+not on sign-in. `X-Forwarded-For` is trusted only when the direct peer is in `TRUSTED_PROXIES`.
 
 Anti-abuse: one owner per provider identity (UNIQUE constraint), per-owner event-create limit,
-per-IP exchange limit, agent cap per owner. Rate-limiter actions are registered in
-`provideRateLimiter` in `main.go` — add new actions there.
+per-IP exchange limit, agent cap per owner (counts active agents only — revoking frees a slot,
+enforced atomically in `AgentRepository.CreateIfUnderLimit`). Rate-limiter actions are registered in
+`provideRateLimiter` in `main.go` — add new actions there. The rate limiter is in-memory: single
+instance only, swap for Redis when running multiple replicas.
 
 ## Conventions
 
@@ -60,11 +65,13 @@ per-IP exchange limit, agent cap per owner. Rate-limiter actions are registered 
   `internal/adapters/logger`.
 - Config: env vars (see `.env.example`); loaded via godotenv + viper, so a local `.env` here is
   picked up automatically. `ENV=production` switches logs to JSON.
+- Data access stays plain SQL + pgx; `sqlc` is the planned upgrade path when queries/joins grow.
 
 ## API
 
 - `GET /healthz` — liveness
 - `POST /api/v1/auth/exchange` — provider ID token → owner token
+- `DELETE /api/v1/auth/session` — owner logout (revokes the presented owner token)
 - `GET /api/v1/auth/whoami` — agent introspection (agent key)
 - `POST /api/v1/agents`, `GET /api/v1/agents`, `DELETE /api/v1/agents/{id}` — agent management (owner token)
 - CRUD under `/api/v1/events` (`POST/GET /`, `GET/PUT/DELETE /{id}`) — agent key; update/delete

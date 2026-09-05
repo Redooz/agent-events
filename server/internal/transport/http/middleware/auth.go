@@ -53,7 +53,8 @@ func (a *Auth) RequireOwner(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := authctx.WithOwner(r.Context(), owner)
+		identity := authctx.OwnerIdentity{Owner: owner, TokenHash: usecase.HashToken(raw)}
+		ctx := authctx.WithOwner(r.Context(), identity)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	shutdownTimeout = 10 * time.Second
-	providerTimeout = 15 * time.Second
+	shutdownTimeout        = 10 * time.Second
+	providerTimeout        = 15 * time.Second
+	ownerTokenCleanupEvery = time.Hour
 )
 
 func main() {
@@ -40,6 +41,7 @@ func main() {
 			newZapLogger,
 			provideLogger,
 			provideIdentityVerifier,
+			provideTrustedProxies,
 			fx.Annotate(provideRateLimiter, fx.As(new(port.RateLimiter))),
 			provideAuthConfig,
 			provideRepositories,
@@ -52,7 +54,10 @@ func main() {
 			controller.NewRouter,
 			newHTTPServer,
 		),
-		fx.Invoke(func(*http.Server) {}),
+		fx.Invoke(
+			func(*http.Server) {},
+			provideOwnerTokenCleanup,
+		),
 	).Run()
 }
 
@@ -60,11 +65,24 @@ func provideLogger(z *zap.Logger) port.Logger {
 	return logger.New(z)
 }
 
-func provideIdentityVerifier(cfg config.Config) (port.IdentityVerifier, error) {
+func provideIdentityVerifier(cfg config.Config, log port.Logger) (port.IdentityVerifier, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), providerTimeout)
 	defer cancel()
 
-	return oidc.New(ctx, cfg.GoogleClientID, cfg.AppleClientID, cfg.MicrosoftClientID, cfg.MicrosoftTenant)
+	verifier, err := oidc.New(ctx, cfg.IsDevelopment(), cfg.GoogleClientID, cfg.AppleClientID, cfg.MicrosoftClientID, cfg.MicrosoftTenant)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.IsDevelopment() && cfg.GoogleClientID == "" && cfg.AppleClientID == "" && cfg.MicrosoftClientID == "" {
+		log.Warn("dev identity verifier active: any token string is accepted as an identity (development only); set a provider client id to disable")
+	}
+
+	return verifier, nil
+}
+
+func provideTrustedProxies(cfg config.Config) []*net.IPNet {
+	return cfg.TrustedProxies
 }
 
 func provideRateLimiter(cfg config.Config) *memory.RateLimiter {
@@ -78,6 +96,40 @@ func provideAuthConfig(cfg config.Config) usecase.AuthConfig {
 	return usecase.AuthConfig{
 		OwnerTokenTTL:     cfg.OwnerTokenTTL,
 		MaxAgentsPerOwner: cfg.MaxAgentsPerOwner,
+	}
+}
+
+func provideOwnerTokenCleanup(lc fx.Lifecycle, tokens port.OwnerTokenRepository, log port.Logger) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			go cleanupExpiredTokens(ctx, tokens, log)
+
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			cancel()
+
+			return nil
+		},
+	})
+}
+
+func cleanupExpiredTokens(ctx context.Context, tokens port.OwnerTokenRepository, log port.Logger) {
+	ticker := time.NewTicker(ownerTokenCleanupEvery)
+	defer ticker.Stop()
+
+	for {
+		if err := tokens.DeleteExpired(ctx); err != nil && ctx.Err() == nil {
+			log.Error("expired owner token cleanup failed", port.Err(err))
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

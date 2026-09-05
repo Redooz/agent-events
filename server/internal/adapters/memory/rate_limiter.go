@@ -17,6 +17,8 @@ type bucketKey struct {
 	windowStart int64
 }
 
+// RateLimiter state is in-memory and per process: safe for a single instance
+// only. Swap this for Redis when running multiple replicas.
 type RateLimiter struct {
 	mu     sync.Mutex
 	limits map[string]Limit
@@ -50,13 +52,24 @@ func (r *RateLimiter) Allow(_ context.Context, key, action string) (bool, error)
 	start := now.Truncate(limit.Window).Unix()
 	bucket := bucketKey{action: action, key: key, windowStart: start}
 
-	if len(r.counts) > maxTrackedBuckets {
+	if len(r.counts) >= maxTrackedBuckets {
 		r.prune(now)
+		r.evict()
 	}
 
 	r.counts[bucket]++
 
 	return r.counts[bucket] <= limit.Max, nil
+}
+
+func (r *RateLimiter) evict() {
+	for bucket := range r.counts {
+		if len(r.counts) < maxTrackedBuckets {
+			return
+		}
+
+		delete(r.counts, bucket)
+	}
 }
 
 func (r *RateLimiter) prune(now time.Time) {

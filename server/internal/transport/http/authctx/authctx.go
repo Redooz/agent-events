@@ -25,12 +25,17 @@ func AgentFrom(ctx context.Context) (AgentIdentity, bool) {
 	return identity, ok
 }
 
-func WithOwner(ctx context.Context, owner domain.Owner) context.Context {
-	return context.WithValue(ctx, ownerKey{}, owner)
+type OwnerIdentity struct {
+	Owner     domain.Owner
+	TokenHash string
 }
 
-func OwnerFrom(ctx context.Context) (domain.Owner, bool) {
-	owner, ok := ctx.Value(ownerKey{}).(domain.Owner)
+func WithOwner(ctx context.Context, identity OwnerIdentity) context.Context {
+	return context.WithValue(ctx, ownerKey{}, identity)
+}
 
-	return owner, ok
+func OwnerFrom(ctx context.Context) (OwnerIdentity, bool) {
+	identity, ok := ctx.Value(ownerKey{}).(OwnerIdentity)
+
+	return identity, ok
 }

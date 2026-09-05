@@ -15,16 +15,18 @@ import (
 )
 
 type AuthHandler struct {
-	svc      *usecase.AuthService
-	log      port.Logger
-	validate *validator.Validate
+	svc            *usecase.AuthService
+	log            port.Logger
+	validate       *validator.Validate
+	trustedProxies []*net.IPNet
 }
 
-func NewAuthHandler(svc *usecase.AuthService, log port.Logger) *AuthHandler {
+func NewAuthHandler(svc *usecase.AuthService, log port.Logger, trustedProxies []*net.IPNet) *AuthHandler {
 	return &AuthHandler{
-		svc:      svc,
-		log:      log,
-		validate: validator.New(validator.WithRequiredStructEnabled()),
+		svc:            svc,
+		log:            log,
+		validate:       validator.New(validator.WithRequiredStructEnabled()),
+		trustedProxies: trustedProxies,
 	}
 }
 
@@ -39,7 +41,7 @@ func (h *AuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.Exchange(r.Context(), req.ToInput(clientIP(r)))
+	result, err := h.svc.Exchange(r.Context(), req.ToInput(clientIP(r, h.trustedProxies)))
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -50,6 +52,21 @@ func (h *AuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: result.ExpiresAt,
 		Owner:     dto.NewOwnerResponse(result.Owner),
 	})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	identity, ok := authctx.OwnerFrom(r.Context())
+	if !ok {
+		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
+		return
+	}
+
+	if err := h.svc.RevokeOwnerToken(r.Context(), identity.TokenHash); err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AuthHandler) Whoami(w http.ResponseWriter, r *http.Request) {
@@ -65,18 +82,45 @@ func (h *AuthHandler) Whoami(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		first, _, _ := strings.Cut(forwarded, ",")
-		if ip := strings.TrimSpace(first); ip != "" {
-			return ip
-		}
-	}
-
+func clientIP(r *http.Request, trusted []*net.IPNet) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+
+	peer := net.ParseIP(host)
+	if peer == nil || !isTrustedProxy(peer, trusted) {
+		return host
+	}
+
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded == "" {
+		return host
+	}
+
+	parts := strings.Split(forwarded, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		entry := strings.TrimSpace(parts[i])
+		if entry == "" {
+			continue
+		}
+
+		if ip := net.ParseIP(entry); ip != nil && isTrustedProxy(ip, trusted) {
+			continue
+		}
+
+		return entry
 	}
 
 	return host
+}
+
+func isTrustedProxy(ip net.IP, trusted []*net.IPNet) bool {
+	for _, network := range trusted {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
@@ -34,7 +35,7 @@ func (h *AgentHandler) Register(r chi.Router) {
 }
 
 func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
-	owner, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.OwnerFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
@@ -50,7 +51,7 @@ func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.CreateAgent(r.Context(), owner.ID, req.Name)
+	result, err := h.svc.CreateAgent(r.Context(), identity.Owner.ID, req.Name)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -63,13 +64,13 @@ func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) list(w http.ResponseWriter, r *http.Request) {
-	owner, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.OwnerFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
 	}
 
-	agents, err := h.svc.ListAgents(r.Context(), owner.ID)
+	agents, err := h.svc.ListAgents(r.Context(), identity.Owner.ID)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -79,13 +80,19 @@ func (h *AgentHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) revoke(w http.ResponseWriter, r *http.Request) {
-	owner, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.OwnerFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
 	}
 
-	if err := h.svc.RevokeAgent(r.Context(), owner.ID, chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(id); err != nil {
+		WriteError(w, h.log, apperr.NotFound("agent not found"))
+		return
+	}
+
+	if err := h.svc.RevokeAgent(r.Context(), identity.Owner.ID, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}

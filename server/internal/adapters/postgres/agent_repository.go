@@ -17,19 +17,45 @@ func NewAgentRepository(db *sql.DB) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-func (r *AgentRepository) Create(ctx context.Context, agent domain.Agent) error {
+func (r *AgentRepository) CreateIfUnderLimit(ctx context.Context, agent domain.Agent, max int) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var ownerID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM owners WHERE id = $1 FOR UPDATE`, agent.OwnerID).Scan(&ownerID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, domain.ErrOwnerNotFound
+		}
+
+		return false, err
+	}
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE owner_id = $1 AND revoked_at IS NULL`, agent.OwnerID).Scan(&count); err != nil {
+		return false, err
+	}
+
+	if count >= max {
+		return false, nil
+	}
+
 	var revokedAt sql.NullTime
 	if !agent.RevokedAt.IsZero() {
 		revokedAt = sql.NullTime{Time: agent.RevokedAt, Valid: true}
 	}
 
-	_, err := r.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agents (id, owner_id, name, key_hash, created_at, revoked_at, last_used_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		agent.ID, agent.OwnerID, agent.Name, agent.KeyHash, agent.CreatedAt, revokedAt, agent.LastUsedAt,
-	)
+	); err != nil {
+		return false, err
+	}
 
-	return err
+	return true, tx.Commit()
 }
 
 func (r *AgentRepository) Get(ctx context.Context, id string) (domain.Agent, error) {
@@ -80,15 +106,6 @@ func (r *AgentRepository) ListByOwner(ctx context.Context, ownerID string) ([]do
 	return agents, rows.Err()
 }
 
-func (r *AgentRepository) CountByOwner(ctx context.Context, ownerID string) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE owner_id = $1`, ownerID).Scan(&count); err != nil {
-		return 0, err
-	}
-
-	return count, nil
-}
-
 func (r *AgentRepository) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE agents
@@ -128,7 +145,7 @@ func scanAgent(row interface{ Scan(dest ...any) error }) (domain.Agent, error) {
 	)
 
 	if err := row.Scan(&agent.ID, &agent.OwnerID, &agent.Name, &agent.KeyHash, &agent.CreatedAt, &revokedAt, &lastUsedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || isInvalidInputSyntax(err) {
 			return domain.Agent{}, domain.ErrAgentNotFound
 		}
 

@@ -51,7 +51,7 @@ func TestMultiVerifierRoutesAndReportsUnavailable(t *testing.T) {
 func TestMultiVerifierDevModeWhenUnconfigured(t *testing.T) {
 	t.Parallel()
 
-	verifier, err := newWithOptions(context.Background(), providerOptions{})
+	verifier, err := newWithOptions(context.Background(), providerOptions{allowDevVerifier: true})
 	if err != nil {
 		t.Fatalf("newWithOptions() error = %v, want nil", err)
 	}
@@ -65,5 +65,18 @@ func TestMultiVerifierDevModeWhenUnconfigured(t *testing.T) {
 		if identity.Provider != provider || identity.Subject != "dev-token" {
 			t.Errorf("Verify(%q) = %+v, want %q/dev-token", provider, identity, provider)
 		}
+	}
+}
+
+func TestMultiVerifierRejectsDevModeWhenNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	verifier, err := newWithOptions(context.Background(), providerOptions{allowDevVerifier: false})
+	if err == nil {
+		t.Fatalf("newWithOptions() error = nil, want error (dev verifier must not start when disallowed)")
+	}
+
+	if verifier != nil {
+		t.Errorf("newWithOptions() verifier = %+v, want nil", verifier)
 	}
 }

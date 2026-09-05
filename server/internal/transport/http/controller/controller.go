@@ -37,6 +37,7 @@ func NewRouter(
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireOwner)
+			r.Delete("/auth/session", authHandler.Logout)
 			r.Route("/agents", agentHandler.Register)
 		})
 

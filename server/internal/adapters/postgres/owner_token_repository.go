@@ -18,10 +18,6 @@ func NewOwnerTokenRepository(db *sql.DB) *OwnerTokenRepository {
 }
 
 func (r *OwnerTokenRepository) Create(ctx context.Context, token domain.OwnerToken) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM owner_tokens WHERE expires_at < $1`, time.Now().UTC()); err != nil {
-		return err
-	}
-
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO owner_tokens (token_hash, owner_id, expires_at, created_at)
 		VALUES ($1, $2, $3, $4)`,
@@ -49,4 +45,16 @@ func (r *OwnerTokenRepository) GetByHash(ctx context.Context, tokenHash string) 
 	}
 
 	return token, nil
+}
+
+func (r *OwnerTokenRepository) DeleteByHash(ctx context.Context, tokenHash string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM owner_tokens WHERE token_hash = $1`, tokenHash)
+
+	return err
+}
+
+func (r *OwnerTokenRepository) DeleteExpired(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM owner_tokens WHERE expires_at < $1`, time.Now().UTC())
+
+	return err
 }

@@ -110,9 +110,35 @@ func (f *fakeTokenStore) GetByHash(_ context.Context, tokenHash string) (domain.
 	return token, nil
 }
 
+func (f *fakeTokenStore) DeleteByHash(_ context.Context, tokenHash string) error {
+	if f.failErr != nil {
+		return f.failErr
+	}
+
+	delete(f.tokens, tokenHash)
+
+	return nil
+}
+
+func (f *fakeTokenStore) DeleteExpired(_ context.Context) error {
+	if f.failErr != nil {
+		return f.failErr
+	}
+
+	now := time.Now().UTC()
+	for hash, token := range f.tokens {
+		if token.ExpiresAt.Before(now) {
+			delete(f.tokens, hash)
+		}
+	}
+
+	return nil
+}
+
 type fakeAgentStore struct {
-	agents  map[string]domain.Agent
-	failErr error
+	agents     map[string]domain.Agent
+	failErr    error
+	touchCount int
 }
 
 var _ port.AgentRepository = (*fakeAgentStore)(nil)
@@ -121,14 +147,25 @@ func newFakeAgentStore() *fakeAgentStore {
 	return &fakeAgentStore{agents: make(map[string]domain.Agent)}
 }
 
-func (f *fakeAgentStore) Create(_ context.Context, agent domain.Agent) error {
+func (f *fakeAgentStore) CreateIfUnderLimit(_ context.Context, agent domain.Agent, max int) (bool, error) {
 	if f.failErr != nil {
-		return f.failErr
+		return false, f.failErr
+	}
+
+	count := 0
+	for _, existing := range f.agents {
+		if existing.OwnerID == agent.OwnerID && existing.RevokedAt.IsZero() {
+			count++
+		}
+	}
+
+	if count >= max {
+		return false, nil
 	}
 
 	f.agents[agent.ID] = agent
 
-	return nil
+	return true, nil
 }
 
 func (f *fakeAgentStore) Get(_ context.Context, id string) (domain.Agent, error) {
@@ -173,21 +210,6 @@ func (f *fakeAgentStore) ListByOwner(_ context.Context, ownerID string) ([]domai
 	return agents, nil
 }
 
-func (f *fakeAgentStore) CountByOwner(_ context.Context, ownerID string) (int, error) {
-	if f.failErr != nil {
-		return 0, f.failErr
-	}
-
-	count := 0
-	for _, agent := range f.agents {
-		if agent.OwnerID == ownerID {
-			count++
-		}
-	}
-
-	return count, nil
-}
-
 func (f *fakeAgentStore) Revoke(_ context.Context, id string, revokedAt time.Time) error {
 	if f.failErr != nil {
 		return f.failErr
@@ -207,6 +229,8 @@ func (f *fakeAgentStore) Revoke(_ context.Context, id string, revokedAt time.Tim
 }
 
 func (f *fakeAgentStore) TouchLastUsed(_ context.Context, id string, at time.Time) error {
+	f.touchCount++
+
 	if f.failErr != nil {
 		return f.failErr
 	}
@@ -512,6 +536,75 @@ func TestCreateAgentEnforcesLimit(t *testing.T) {
 	_, err = svc.CreateAgent(context.Background(), result.Owner.ID, "one too many")
 	if apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("CreateAgent() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
+	}
+}
+
+func TestCreateAgentFreesSlotAfterRevoke(t *testing.T) {
+	t.Parallel()
+
+	svc := newAuthService(nil, nil, nil, nil, nil)
+
+	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+		Provider: domain.ProviderGoogle,
+		IDToken:  "sub-1",
+		ClientIP: "192.0.2.1",
+	})
+	if err != nil {
+		t.Fatalf("Exchange() error = %v, want nil", err)
+	}
+
+	first, err := svc.CreateAgent(context.Background(), result.Owner.ID, "one")
+	if err != nil {
+		t.Fatalf("CreateAgent() #1 error = %v, want nil", err)
+	}
+
+	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "two"); err != nil {
+		t.Fatalf("CreateAgent() #2 error = %v, want nil", err)
+	}
+
+	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "three"); apperr.KindOf(err) != apperr.KindForbidden {
+		t.Fatalf("CreateAgent() #3 kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
+	}
+
+	if err := svc.RevokeAgent(context.Background(), result.Owner.ID, first.Agent.ID); err != nil {
+		t.Fatalf("RevokeAgent() error = %v, want nil", err)
+	}
+
+	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "again"); err != nil {
+		t.Fatalf("CreateAgent() after revoke error = %v, want nil", err)
+	}
+}
+
+func TestAuthenticateAgentThrottlesTouch(t *testing.T) {
+	t.Parallel()
+
+	agents := newFakeAgentStore()
+	svc := newAuthService(nil, nil, agents, nil, nil)
+
+	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+		Provider: domain.ProviderGoogle,
+		IDToken:  "sub-1",
+		ClientIP: "192.0.2.1",
+	})
+	if err != nil {
+		t.Fatalf("Exchange() error = %v, want nil", err)
+	}
+
+	created, err := svc.CreateAgent(context.Background(), result.Owner.ID, "scout")
+	if err != nil {
+		t.Fatalf("CreateAgent() error = %v, want nil", err)
+	}
+
+	if _, err := svc.AuthenticateAgent(context.Background(), created.Key); err != nil {
+		t.Fatalf("AuthenticateAgent() #1 error = %v, want nil", err)
+	}
+
+	if _, err := svc.AuthenticateAgent(context.Background(), created.Key); err != nil {
+		t.Fatalf("AuthenticateAgent() #2 error = %v, want nil", err)
+	}
+
+	if agents.touchCount != 1 {
+		t.Errorf("TouchLastUsed calls = %d, want 1", agents.touchCount)
 	}
 }
 

@@ -25,12 +25,6 @@ func (r *OwnerTokenRepository) Create(_ context.Context, token domain.OwnerToken
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for hash, stored := range r.tokens {
-		if stored.ExpiresAt.Before(timeNowUTC()) {
-			delete(r.tokens, hash)
-		}
-	}
-
 	r.tokens[token.TokenHash] = token
 
 	return nil
@@ -46,4 +40,27 @@ func (r *OwnerTokenRepository) GetByHash(_ context.Context, tokenHash string) (d
 	}
 
 	return token, nil
+}
+
+func (r *OwnerTokenRepository) DeleteByHash(_ context.Context, tokenHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.tokens, tokenHash)
+
+	return nil
+}
+
+func (r *OwnerTokenRepository) DeleteExpired(_ context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := timeNowUTC()
+	for hash, token := range r.tokens {
+		if token.ExpiresAt.Before(now) {
+			delete(r.tokens, hash)
+		}
+	}
+
+	return nil
 }

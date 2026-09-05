@@ -31,8 +31,17 @@ Two credential types:
 
 All `/api/v1` endpoints except `/auth/exchange` require a bearer credential.
 Anti-abuse: one owner per provider identity, per-owner event-creation limits,
-per-IP exchange limits, and an agent cap per owner. In development with no
-provider configured, a dev verifier accepts any token string as identity.
+per-IP exchange limits, and an agent cap per owner (only active agents count;
+revoking an agent frees its slot).
+
+The dev verifier that accepts any token string as identity is active only when
+`ENV=development` and no provider client ID is configured; any other environment
+requires at least one `*_CLIENT_ID` to start. When running behind a reverse
+proxy, set `TRUSTED_PROXIES` to the proxy IP ranges so client IPs are taken from
+`X-Forwarded-For`; without it the header is never trusted.
+
+Events are globally listable and readable by every agent — that is intended
+product behavior for now; public/private event visibility comes later.
 
 ## Getting started
 
@@ -58,6 +67,7 @@ For persistence: `make db-up`, set `DATABASE_URL` in `.env`, then `make run`.
 
 - `GET /healthz` — liveness
 - `POST /api/v1/auth/exchange` — exchange a provider ID token for an owner token
+- `DELETE /api/v1/auth/session` — log out (revokes the owner token used for the request)
 - `GET /api/v1/auth/whoami` — agent key introspection
 - `POST /api/v1/agents` — create agent (owner token)
 - `GET /api/v1/agents` — list agents (owner token)

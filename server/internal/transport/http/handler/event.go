@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
@@ -65,7 +66,13 @@ func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EventHandler) get(w http.ResponseWriter, r *http.Request) {
-	event, err := h.svc.Get(r.Context(), chi.URLParam(r, "id"))
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	event, err := h.svc.Get(r.Context(), id)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -101,7 +108,13 @@ func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Update(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, chi.URLParam(r, "id"), req.ToInput())
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	event, err := h.svc.Update(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -117,12 +130,27 @@ func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, chi.URLParam(r, "id")); err != nil {
+	id, err := eventURLID(r)
+	if err != nil {
+		WriteError(w, h.log, err)
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func eventURLID(r *http.Request) (string, error) {
+	id := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(id); err != nil {
+		return "", apperr.NotFound("event not found")
+	}
+
+	return id, nil
 }
 
 func validationError(err error) error {
