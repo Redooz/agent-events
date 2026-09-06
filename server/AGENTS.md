@@ -11,18 +11,21 @@ no code. Run all Go/Make commands from here, not the repo root.
 - `make test` — `go test ./... -race -count=1` (always race + no cache)
 - `make lint` / `make fmt` — golangci-lint (v2 config in `.golangci.yml`)
 - `make run` — starts the API on `$PORT` (default 8080)
+- `make gen` — regenerate sqlc code (`sqlc generate`; run after changing queries or migrations)
 - `make db-up` / `make db-down` — local Postgres via docker compose (requires docker group)
 - Single test: `go test ./internal/core/usecase/ -run TestName -race -count=1`
 
-Toolchain (go, golangci-lint) is pinned via `mise.toml`.
+Toolchain (go, golangci-lint, sqlc) is pinned via `mise.toml`.
 
 ## Architecture
 
 Hexagonal / ports-and-adapters, wired with uber/fx in `cmd/api/main.go`:
 
 - `internal/core/` — `domain`, `usecase`, `port` (interfaces). Must not import adapters, transport, or zap.
-- `internal/adapters/` — `memory` (in-memory repos + rate limiter), `postgres` (pgx + embedded
-  goose migrations), `oidc` (Google/Apple/Microsoft identity verifiers), `logger` (zap impl of `port.Logger`).
+- `internal/adapters/` — `memory` (in-memory rate limiter: single instance only, swap for Redis
+  when running multiple replicas), `postgres` (pgxpool, sqlc-generated
+  queries in `gen/`, hand-written query SQL in `queries/`, embedded goose migrations), `oidc`
+  (Google/Apple/Microsoft identity verifiers), `logger` (zap impl of `port.Logger`).
 - `internal/transport/http/` — `controller` (chi router), `handler`, `dto`, `middleware` (auth),
   `authctx` (credential context accessors).
 - `pkg/` — `apperr` (error kinds), `config` (env loading).
@@ -34,21 +37,21 @@ Adding a component: write it against a `port` interface, provide the impl in `fx
 
 Two credentials, both opaque random tokens stored SHA-256 hashed (plaintext never persisted):
 
-- Owner token (`aeo_…`) — issued by `POST /api/v1/auth/exchange` after verifying a provider ID
-  token. Authorizes agent management via `middleware.Auth.RequireOwner`; revoked by the owner
+- User token (`aeu_…`) — issued by `POST /api/v1/auth/exchange` after verifying a provider ID
+  token. Authorizes agent management via `middleware.Auth.RequireUser`; revoked by the user
   through `DELETE /api/v1/auth/session` (logout).
-- Agent key (`aea_…`) — minted by owners, revocable. Authorizes everything else via `RequireAgent`;
-  requests act as "agent on behalf of owner" (`usecase.Actor` carries OwnerID + AgentID).
+- Agent key (`aea_…`) — minted by users, revocable. Authorizes everything else via `RequireAgent`;
+  requests act as "agent on behalf of user" (`usecase.Actor` carries UserID + AgentID).
 
-Storage mode: `DATABASE_URL` set → Postgres (goose migrations run automatically at startup);
-unset → in-memory, data lost on restart (dev/test only). The dev verifier that accepts any token
+Storage mode: Postgres is required (`DATABASE_URL`; enforced in `config.Validate`), goose
+migrations run automatically at startup. The dev verifier that accepts any token
 string as identity is allowed only in `ENV=development` (wired via `oidc.New`'s `allowDevVerifier`);
 every other env requires at least one `*_CLIENT_ID` (enforced in `config.Validate` and at startup).
-Expired owner tokens are purged by an hourly cleanup loop (`provideOwnerTokenCleanup` in `main.go`),
+Expired user tokens are purged by an hourly cleanup loop (`provideUserTokenCleanup` in `main.go`),
 not on sign-in. `X-Forwarded-For` is trusted only when the direct peer is in `TRUSTED_PROXIES`.
 
-Anti-abuse: one owner per provider identity (UNIQUE constraint), per-owner event-create limit,
-per-IP exchange limit, agent cap per owner (counts active agents only — revoking frees a slot,
+Anti-abuse: one user per provider identity (UNIQUE constraint), per-user event-create limit,
+per-IP exchange limit, agent cap per user (counts active agents only — revoking frees a slot,
 enforced atomically in `AgentRepository.CreateIfUnderLimit`). Rate-limiter actions are registered in
 `provideRateLimiter` in `main.go` — add new actions there. The rate limiter is in-memory: single
 instance only, swap for Redis when running multiple replicas.
@@ -65,17 +68,21 @@ instance only, swap for Redis when running multiple replicas.
   `internal/adapters/logger`.
 - Config: env vars (see `.env.example`); loaded via godotenv + viper, so a local `.env` here is
   picked up automatically. `ENV=production` switches logs to JSON.
-- Data access stays plain SQL + pgx; `sqlc` is the planned upgrade path when queries/joins grow.
+- Data access: plain SQL in `internal/adapters/postgres/queries/*.sql`, compiled by `sqlc` into
+  `internal/adapters/postgres/gen/` (committed; regenerate with `make gen` after changing queries
+  or migrations). The goose migration files double as the sqlc schema — never edit old migrations;
+  add a new one. The `gen/` package is an adapter-internal detail: never import it outside
+  `internal/adapters/postgres/`, and map generated rows to domain types in the repos.
 
 ## API
 
 - `GET /healthz` — liveness
-- `POST /api/v1/auth/exchange` — provider ID token → owner token
-- `DELETE /api/v1/auth/session` — owner logout (revokes the presented owner token)
+- `POST /api/v1/auth/exchange` — provider ID token → user token
+- `DELETE /api/v1/auth/session` — user logout (revokes the presented user token)
 - `GET /api/v1/auth/whoami` — agent introspection (agent key)
-- `POST /api/v1/agents`, `GET /api/v1/agents`, `DELETE /api/v1/agents/{id}` — agent management (owner token)
+- `POST /api/v1/agents`, `GET /api/v1/agents`, `DELETE /api/v1/agents/{id}` — agent management (user token)
 - CRUD under `/api/v1/events` (`POST/GET /`, `GET/PUT/DELETE /{id}`) — agent key; update/delete
-  restricted to the event's owner
+  restricted to the event's user
 
 ## Maintenance
 

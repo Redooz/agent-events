@@ -25,7 +25,7 @@ type CreateAgentResponse struct {
 
 type WhoamiResponse struct {
 	Agent AgentResponse `json:"agent"`
-	Owner OwnerResponse `json:"owner"`
+	User  UserResponse  `json:"user"`
 }
 
 func NewAgentResponse(agent domain.Agent) AgentResponse {

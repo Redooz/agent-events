@@ -2,52 +2,59 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-const migrateTimeout = 30 * time.Second
+const (
+	migrateTimeout  = 30 * time.Second
+	pingTimeout     = 5 * time.Second
+	poolMaxConns    = 25
+	connMaxLifetime = 30 * time.Minute
+)
 
-func Open(databaseURL string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", databaseURL)
+func Open(databaseURL string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres url: %w", err)
+	}
+
+	cfg.MaxConns = poolMaxConns
+	cfg.MaxConnLifetime = connMaxLifetime
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(30 * time.Minute)
-
-	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	pingCtx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 
-	if err := db.PingContext(pingCtx); err != nil {
-		_ = db.Close()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
 
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	return db, nil
+	return pool, nil
 }
 
-func isInvalidInputSyntax(err error) bool {
-	var pgErr *pgconn.PgError
+func Migrate(pool *pgxpool.Pool) error {
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
 
-	return errors.As(err, &pgErr) && pgErr.Code == "22P02"
-}
-
-func Migrate(db *sql.DB) error {
 	goose.SetBaseFS(migrationsFS)
 
 	if err := goose.SetDialect("postgres"); err != nil {
@@ -62,4 +69,29 @@ func Migrate(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+func asNotFound(err error, sentinel error) error {
+	var pgErr *pgconn.PgError
+	if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "22P02") {
+		return sentinel
+	}
+
+	return err
+}
+
+func timestamptz(t time.Time) pgtype.Timestamptz {
+	if t.IsZero() {
+		return pgtype.Timestamptz{}
+	}
+
+	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+func timeFromTimestamptz(t pgtype.Timestamptz) time.Time {
+	if !t.Valid {
+		return time.Time{}
+	}
+
+	return t.Time
 }

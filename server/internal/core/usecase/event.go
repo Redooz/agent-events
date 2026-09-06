@@ -37,25 +37,25 @@ func NewEventService(repo port.EventRepository, limiter port.RateLimiter, logger
 }
 
 func (s *EventService) Create(ctx context.Context, actor Actor, in CreateEventInput) (domain.Event, error) {
-	if actor.OwnerID == "" {
-		return domain.Event{}, apperr.Invalid("owner is required")
+	if actor.UserID == "" {
+		return domain.Event{}, apperr.Invalid("user is required")
 	}
 
-	allowed, err := s.limiter.Allow(ctx, "owner:"+actor.OwnerID, ActionCreateEvent)
+	allowed, err := s.limiter.Allow(ctx, "user:"+actor.UserID, ActionCreateEvent)
 	if err != nil {
 		s.logger.Error("event rate limit check failed", port.Err(err))
 		return domain.Event{}, apperr.Wrap(err, "could not check rate limit")
 	}
 
 	if !allowed {
-		s.logger.Warn("event create rate limited", port.Str("owner_id", actor.OwnerID), port.Str("agent_id", actor.AgentID))
+		s.logger.Warn("event create rate limited", port.Str("user_id", actor.UserID), port.Str("agent_id", actor.AgentID))
 		return domain.Event{}, apperr.TooMany("event creation limit reached, try again later")
 	}
 
 	now := time.Now().UTC()
 	event := domain.Event{
 		ID:          newID(),
-		OwnerID:     actor.OwnerID,
+		UserID:      actor.UserID,
 		Name:        in.Name,
 		Description: in.Description,
 		CreatedAt:   now,
@@ -75,7 +75,7 @@ func (s *EventService) Create(ctx context.Context, actor Actor, in CreateEventIn
 
 	s.logger.Info("event created",
 		port.Str("event_id", saved.ID),
-		port.Str("owner_id", actor.OwnerID),
+		port.Str("user_id", actor.UserID),
 		port.Str("agent_id", actor.AgentID),
 	)
 
@@ -119,11 +119,11 @@ func (s *EventService) Update(ctx context.Context, actor Actor, id string, in Up
 		return domain.Event{}, apperr.Wrap(err, "could not update event")
 	}
 
-	if event.OwnerID != actor.OwnerID {
-		s.logger.Warn("event update denied for non-owner",
+	if event.UserID != actor.UserID {
+		s.logger.Warn("event update denied for non-user",
 			port.Str("event_id", id),
-			port.Str("requesting_owner_id", actor.OwnerID),
-			port.Str("event_owner_id", event.OwnerID),
+			port.Str("requesting_user_id", actor.UserID),
+			port.Str("event_user_id", event.UserID),
 		)
 		return domain.Event{}, apperr.Forbidden("event does not belong to you")
 	}
@@ -143,7 +143,7 @@ func (s *EventService) Update(ctx context.Context, actor Actor, id string, in Up
 		return domain.Event{}, apperr.Wrap(err, "could not update event")
 	}
 
-	s.logger.Info("event updated", port.Str("event_id", updated.ID), port.Str("owner_id", actor.OwnerID))
+	s.logger.Info("event updated", port.Str("event_id", updated.ID), port.Str("user_id", actor.UserID))
 
 	return updated, nil
 }
@@ -159,11 +159,11 @@ func (s *EventService) Delete(ctx context.Context, actor Actor, id string) error
 		return apperr.Wrap(err, "could not delete event")
 	}
 
-	if event.OwnerID != actor.OwnerID {
-		s.logger.Warn("event delete denied for non-owner",
+	if event.UserID != actor.UserID {
+		s.logger.Warn("event delete denied for non-user",
 			port.Str("event_id", id),
-			port.Str("requesting_owner_id", actor.OwnerID),
-			port.Str("event_owner_id", event.OwnerID),
+			port.Str("requesting_user_id", actor.UserID),
+			port.Str("event_user_id", event.UserID),
 		)
 		return apperr.Forbidden("event does not belong to you")
 	}
@@ -173,7 +173,7 @@ func (s *EventService) Delete(ctx context.Context, actor Actor, id string) error
 		return apperr.Wrap(err, "could not delete event")
 	}
 
-	s.logger.Info("event deleted", port.Str("event_id", id), port.Str("owner_id", actor.OwnerID))
+	s.logger.Info("event deleted", port.Str("event_id", id), port.Str("user_id", actor.UserID))
 
 	return nil
 }

@@ -27,67 +27,67 @@ func (f *fakeVerifier) Verify(_ context.Context, provider, idToken string) (doma
 	return domain.Identity{Provider: provider, Subject: idToken, Email: idToken + "@example.com"}, nil
 }
 
-type fakeOwnerStore struct {
-	owners  map[string]domain.Owner
+type fakeUserStore struct {
+	users   map[string]domain.User
 	failErr error
 }
 
-var _ port.OwnerRepository = (*fakeOwnerStore)(nil)
+var _ port.UserRepository = (*fakeUserStore)(nil)
 
-func newFakeOwnerStore() *fakeOwnerStore {
-	return &fakeOwnerStore{owners: make(map[string]domain.Owner)}
+func newFakeUserStore() *fakeUserStore {
+	return &fakeUserStore{users: make(map[string]domain.User)}
 }
 
-func (f *fakeOwnerStore) UpsertByIdentity(_ context.Context, provider, subject, email string) (domain.Owner, error) {
+func (f *fakeUserStore) UpsertByIdentity(_ context.Context, provider, subject, email string) (domain.User, error) {
 	if f.failErr != nil {
-		return domain.Owner{}, f.failErr
+		return domain.User{}, f.failErr
 	}
 
-	for _, owner := range f.owners {
-		if owner.Provider == provider && owner.Subject == subject {
-			owner.Email = email
-			f.owners[owner.ID] = owner
-			return owner, nil
+	for _, user := range f.users {
+		if user.Provider == provider && user.Subject == subject {
+			user.Email = email
+			f.users[user.ID] = user
+			return user, nil
 		}
 	}
 
-	owner := domain.Owner{
-		ID:        "owner-" + subject,
+	user := domain.User{
+		ID:        "user-" + subject,
 		Provider:  provider,
 		Subject:   subject,
 		Email:     email,
 		CreatedAt: time.Now().UTC(),
 	}
-	f.owners[owner.ID] = owner
+	f.users[user.ID] = user
 
-	return owner, nil
+	return user, nil
 }
 
-func (f *fakeOwnerStore) Get(_ context.Context, id string) (domain.Owner, error) {
+func (f *fakeUserStore) Get(_ context.Context, id string) (domain.User, error) {
 	if f.failErr != nil {
-		return domain.Owner{}, f.failErr
+		return domain.User{}, f.failErr
 	}
 
-	owner, ok := f.owners[id]
+	user, ok := f.users[id]
 	if !ok {
-		return domain.Owner{}, domain.ErrOwnerNotFound
+		return domain.User{}, domain.ErrUserNotFound
 	}
 
-	return owner, nil
+	return user, nil
 }
 
 type fakeTokenStore struct {
-	tokens  map[string]domain.OwnerToken
+	tokens  map[string]domain.UserToken
 	failErr error
 }
 
-var _ port.OwnerTokenRepository = (*fakeTokenStore)(nil)
+var _ port.UserTokenRepository = (*fakeTokenStore)(nil)
 
 func newFakeTokenStore() *fakeTokenStore {
-	return &fakeTokenStore{tokens: make(map[string]domain.OwnerToken)}
+	return &fakeTokenStore{tokens: make(map[string]domain.UserToken)}
 }
 
-func (f *fakeTokenStore) Create(_ context.Context, token domain.OwnerToken) error {
+func (f *fakeTokenStore) Create(_ context.Context, token domain.UserToken) error {
 	if f.failErr != nil {
 		return f.failErr
 	}
@@ -97,14 +97,14 @@ func (f *fakeTokenStore) Create(_ context.Context, token domain.OwnerToken) erro
 	return nil
 }
 
-func (f *fakeTokenStore) GetByHash(_ context.Context, tokenHash string) (domain.OwnerToken, error) {
+func (f *fakeTokenStore) GetByHash(_ context.Context, tokenHash string) (domain.UserToken, error) {
 	if f.failErr != nil {
-		return domain.OwnerToken{}, f.failErr
+		return domain.UserToken{}, f.failErr
 	}
 
 	token, ok := f.tokens[tokenHash]
 	if !ok {
-		return domain.OwnerToken{}, domain.ErrOwnerTokenNotFound
+		return domain.UserToken{}, domain.ErrUserTokenNotFound
 	}
 
 	return token, nil
@@ -154,7 +154,7 @@ func (f *fakeAgentStore) CreateIfUnderLimit(_ context.Context, agent domain.Agen
 
 	count := 0
 	for _, existing := range f.agents {
-		if existing.OwnerID == agent.OwnerID && existing.RevokedAt.IsZero() {
+		if existing.UserID == agent.UserID && existing.RevokedAt.IsZero() {
 			count++
 		}
 	}
@@ -195,14 +195,14 @@ func (f *fakeAgentStore) GetByKeyHash(_ context.Context, keyHash string) (domain
 	return domain.Agent{}, domain.ErrAgentNotFound
 }
 
-func (f *fakeAgentStore) ListByOwner(_ context.Context, ownerID string) ([]domain.Agent, error) {
+func (f *fakeAgentStore) ListByUser(_ context.Context, userID string) ([]domain.Agent, error) {
 	if f.failErr != nil {
 		return nil, f.failErr
 	}
 
 	agents := make([]domain.Agent, 0)
 	for _, agent := range f.agents {
-		if agent.OwnerID == ownerID {
+		if agent.UserID == userID {
 			agents = append(agents, agent)
 		}
 	}
@@ -262,14 +262,14 @@ func (f *fakeAuthLimiter) Allow(_ context.Context, _, _ string) (bool, error) {
 }
 
 func newAuthService(
-	owners *fakeOwnerStore,
+	users *fakeUserStore,
 	tokens *fakeTokenStore,
 	agents *fakeAgentStore,
 	verifier port.IdentityVerifier,
 	limiter port.RateLimiter,
 ) *usecase.AuthService {
-	if owners == nil {
-		owners = newFakeOwnerStore()
+	if users == nil {
+		users = newFakeUserStore()
 	}
 	if tokens == nil {
 		tokens = newFakeTokenStore()
@@ -284,17 +284,17 @@ func newAuthService(
 		limiter = &fakeAuthLimiter{allow: true}
 	}
 
-	return usecase.NewAuthService(verifier, owners, tokens, agents, limiter, noopLogger{}, usecase.AuthConfig{
-		OwnerTokenTTL:     24 * time.Hour,
-		MaxAgentsPerOwner: 2,
+	return usecase.NewAuthService(verifier, users, tokens, agents, limiter, noopLogger{}, usecase.AuthConfig{
+		UserTokenTTL:     24 * time.Hour,
+		MaxAgentsPerUser: 2,
 	})
 }
 
-func TestExchangeIssuesTokenAndUpsertsOwner(t *testing.T) {
+func TestExchangeIssuesTokenAndUpsertsUser(t *testing.T) {
 	t.Parallel()
 
-	owners := newFakeOwnerStore()
-	svc := newAuthService(owners, nil, nil, nil, nil)
+	users := newFakeUserStore()
+	svc := newAuthService(users, nil, nil, nil, nil)
 
 	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
 		Provider: domain.ProviderGoogle,
@@ -305,20 +305,20 @@ func TestExchangeIssuesTokenAndUpsertsOwner(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	if !strings.HasPrefix(result.Token, "aeo_") {
-		t.Errorf("Exchange() token = %q, want aeo_ prefix", result.Token)
+	if !strings.HasPrefix(result.Token, "aeu_") {
+		t.Errorf("Exchange() token = %q, want aeu_ prefix", result.Token)
 	}
 
 	if result.ExpiresAt.Before(time.Now().UTC()) {
 		t.Error("Exchange() token already expired")
 	}
 
-	if result.Owner.Provider != domain.ProviderGoogle || result.Owner.Subject != "google-sub-1" {
-		t.Errorf("Exchange() owner = %+v, want google identity", result.Owner)
+	if result.User.Provider != domain.ProviderGoogle || result.User.Subject != "google-sub-1" {
+		t.Errorf("Exchange() user = %+v, want google identity", result.User)
 	}
 
-	if len(owners.owners) != 1 {
-		t.Errorf("Exchange() created %d owners, want 1", len(owners.owners))
+	if len(users.users) != 1 {
+		t.Errorf("Exchange() created %d users, want 1", len(users.users))
 	}
 
 	again, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
@@ -330,8 +330,8 @@ func TestExchangeIssuesTokenAndUpsertsOwner(t *testing.T) {
 		t.Fatalf("Exchange() second call error = %v, want nil", err)
 	}
 
-	if again.Owner.ID != result.Owner.ID {
-		t.Errorf("Exchange() second call created new owner %q, want same %q", again.Owner.ID, result.Owner.ID)
+	if again.User.ID != result.User.ID {
+		t.Errorf("Exchange() second call created new user %q, want same %q", again.User.ID, result.User.ID)
 	}
 
 	if again.Token == result.Token {
@@ -399,7 +399,7 @@ func TestExchangeReportsProviderUnavailable(t *testing.T) {
 	}
 }
 
-func TestAuthenticateOwnerRoundTripsExchange(t *testing.T) {
+func TestAuthenticateUserRoundTripsExchange(t *testing.T) {
 	t.Parallel()
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
@@ -413,28 +413,28 @@ func TestAuthenticateOwnerRoundTripsExchange(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	owner, err := svc.AuthenticateOwner(context.Background(), result.Token)
+	user, err := svc.AuthenticateUser(context.Background(), result.Token)
 	if err != nil {
-		t.Fatalf("AuthenticateOwner() error = %v, want nil", err)
+		t.Fatalf("AuthenticateUser() error = %v, want nil", err)
 	}
 
-	if owner.ID != result.Owner.ID {
-		t.Errorf("AuthenticateOwner() owner = %q, want %q", owner.ID, result.Owner.ID)
+	if user.ID != result.User.ID {
+		t.Errorf("AuthenticateUser() user = %q, want %q", user.ID, result.User.ID)
 	}
 }
 
-func TestAuthenticateOwnerRejectsUnknownAndExpiredTokens(t *testing.T) {
+func TestAuthenticateUserRejectsUnknownAndExpiredTokens(t *testing.T) {
 	t.Parallel()
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	if _, err := svc.AuthenticateOwner(context.Background(), "aeo_unknown"); apperr.KindOf(err) != apperr.KindUnauthorized {
-		t.Fatalf("AuthenticateOwner() kind = %v, want %v", apperr.KindOf(err), apperr.KindUnauthorized)
+	if _, err := svc.AuthenticateUser(context.Background(), "aeu_unknown"); apperr.KindOf(err) != apperr.KindUnauthorized {
+		t.Fatalf("AuthenticateUser() kind = %v, want %v", apperr.KindOf(err), apperr.KindUnauthorized)
 	}
 
-	owners := newFakeOwnerStore()
+	users := newFakeUserStore()
 	tokens := newFakeTokenStore()
-	svc = newAuthService(owners, tokens, nil, nil, nil)
+	svc = newAuthService(users, tokens, nil, nil, nil)
 
 	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
 		Provider: domain.ProviderGoogle,
@@ -450,8 +450,8 @@ func TestAuthenticateOwnerRejectsUnknownAndExpiredTokens(t *testing.T) {
 		tokens.tokens[hash] = token
 	}
 
-	if _, err := svc.AuthenticateOwner(context.Background(), result.Token); apperr.KindOf(err) != apperr.KindUnauthorized {
-		t.Fatalf("AuthenticateOwner() kind = %v, want %v", apperr.KindOf(err), apperr.KindUnauthorized)
+	if _, err := svc.AuthenticateUser(context.Background(), result.Token); apperr.KindOf(err) != apperr.KindUnauthorized {
+		t.Fatalf("AuthenticateUser() kind = %v, want %v", apperr.KindOf(err), apperr.KindUnauthorized)
 	}
 }
 
@@ -469,7 +469,7 @@ func TestAgentKeyLifecycle(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	created, err := svc.CreateAgent(context.Background(), result.Owner.ID, "scout")
+	created, err := svc.CreateAgent(context.Background(), result.User.ID, "scout")
 	if err != nil {
 		t.Fatalf("CreateAgent() error = %v, want nil", err)
 	}
@@ -478,8 +478,8 @@ func TestAgentKeyLifecycle(t *testing.T) {
 		t.Errorf("CreateAgent() key = %q, want aea_ prefix", created.Key)
 	}
 
-	if created.Agent.OwnerID != result.Owner.ID {
-		t.Errorf("CreateAgent() agent owner = %q, want %q", created.Agent.OwnerID, result.Owner.ID)
+	if created.Agent.UserID != result.User.ID {
+		t.Errorf("CreateAgent() agent user = %q, want %q", created.Agent.UserID, result.User.ID)
 	}
 
 	creds, err := svc.AuthenticateAgent(context.Background(), created.Key)
@@ -487,11 +487,11 @@ func TestAgentKeyLifecycle(t *testing.T) {
 		t.Fatalf("AuthenticateAgent() error = %v, want nil", err)
 	}
 
-	if creds.Agent.ID != created.Agent.ID || creds.Owner.ID != result.Owner.ID {
-		t.Errorf("AuthenticateAgent() = %+v, want agent %q / owner %q", creds, created.Agent.ID, result.Owner.ID)
+	if creds.Agent.ID != created.Agent.ID || creds.User.ID != result.User.ID {
+		t.Errorf("AuthenticateAgent() = %+v, want agent %q / user %q", creds, created.Agent.ID, result.User.ID)
 	}
 
-	listed, err := svc.ListAgents(context.Background(), result.Owner.ID)
+	listed, err := svc.ListAgents(context.Background(), result.User.ID)
 	if err != nil {
 		t.Fatalf("ListAgents() error = %v, want nil", err)
 	}
@@ -500,11 +500,11 @@ func TestAgentKeyLifecycle(t *testing.T) {
 		t.Errorf("ListAgents() = %+v, want the created agent", listed)
 	}
 
-	if err := svc.RevokeAgent(context.Background(), result.Owner.ID, created.Agent.ID); err != nil {
+	if err := svc.RevokeAgent(context.Background(), result.User.ID, created.Agent.ID); err != nil {
 		t.Fatalf("RevokeAgent() error = %v, want nil", err)
 	}
 
-	if err := svc.RevokeAgent(context.Background(), result.Owner.ID, created.Agent.ID); err != nil {
+	if err := svc.RevokeAgent(context.Background(), result.User.ID, created.Agent.ID); err != nil {
 		t.Errorf("RevokeAgent() on revoked agent error = %v, want nil (idempotent)", err)
 	}
 
@@ -528,12 +528,12 @@ func TestCreateAgentEnforcesLimit(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "agent"); err != nil {
+		if _, err := svc.CreateAgent(context.Background(), result.User.ID, "agent"); err != nil {
 			t.Fatalf("CreateAgent() #%d error = %v, want nil", i+1, err)
 		}
 	}
 
-	_, err = svc.CreateAgent(context.Background(), result.Owner.ID, "one too many")
+	_, err = svc.CreateAgent(context.Background(), result.User.ID, "one too many")
 	if apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("CreateAgent() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
@@ -553,24 +553,24 @@ func TestCreateAgentFreesSlotAfterRevoke(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	first, err := svc.CreateAgent(context.Background(), result.Owner.ID, "one")
+	first, err := svc.CreateAgent(context.Background(), result.User.ID, "one")
 	if err != nil {
 		t.Fatalf("CreateAgent() #1 error = %v, want nil", err)
 	}
 
-	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "two"); err != nil {
+	if _, err := svc.CreateAgent(context.Background(), result.User.ID, "two"); err != nil {
 		t.Fatalf("CreateAgent() #2 error = %v, want nil", err)
 	}
 
-	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "three"); apperr.KindOf(err) != apperr.KindForbidden {
+	if _, err := svc.CreateAgent(context.Background(), result.User.ID, "three"); apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("CreateAgent() #3 kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
 
-	if err := svc.RevokeAgent(context.Background(), result.Owner.ID, first.Agent.ID); err != nil {
+	if err := svc.RevokeAgent(context.Background(), result.User.ID, first.Agent.ID); err != nil {
 		t.Fatalf("RevokeAgent() error = %v, want nil", err)
 	}
 
-	if _, err := svc.CreateAgent(context.Background(), result.Owner.ID, "again"); err != nil {
+	if _, err := svc.CreateAgent(context.Background(), result.User.ID, "again"); err != nil {
 		t.Fatalf("CreateAgent() after revoke error = %v, want nil", err)
 	}
 }
@@ -590,7 +590,7 @@ func TestAuthenticateAgentThrottlesTouch(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	created, err := svc.CreateAgent(context.Background(), result.Owner.ID, "scout")
+	created, err := svc.CreateAgent(context.Background(), result.User.ID, "scout")
 	if err != nil {
 		t.Fatalf("CreateAgent() error = %v, want nil", err)
 	}
@@ -622,19 +622,19 @@ func TestCreateAgentRejectsBlankName(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	_, err = svc.CreateAgent(context.Background(), result.Owner.ID, "   ")
+	_, err = svc.CreateAgent(context.Background(), result.User.ID, "   ")
 	if apperr.KindOf(err) != apperr.KindInvalid {
 		t.Fatalf("CreateAgent() kind = %v, want %v", apperr.KindOf(err), apperr.KindInvalid)
 	}
 }
 
-func TestRevokeAgentDeniesForeignOwner(t *testing.T) {
+func TestRevokeAgentDeniesForeignUser(t *testing.T) {
 	t.Parallel()
 
-	owners := newFakeOwnerStore()
-	svc := newAuthService(owners, nil, nil, nil, nil)
+	users := newFakeUserStore()
+	svc := newAuthService(users, nil, nil, nil, nil)
 
-	ownerA, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	userA, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-a",
 		ClientIP: "192.0.2.1",
@@ -643,7 +643,7 @@ func TestRevokeAgentDeniesForeignOwner(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	ownerB, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	userB, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-b",
 		ClientIP: "192.0.2.1",
@@ -652,17 +652,17 @@ func TestRevokeAgentDeniesForeignOwner(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	agent, err := svc.CreateAgent(context.Background(), ownerA.Owner.ID, "scout")
+	agent, err := svc.CreateAgent(context.Background(), userA.User.ID, "scout")
 	if err != nil {
 		t.Fatalf("CreateAgent() error = %v, want nil", err)
 	}
 
-	if err := svc.RevokeAgent(context.Background(), ownerB.Owner.ID, agent.Agent.ID); apperr.KindOf(err) != apperr.KindForbidden {
+	if err := svc.RevokeAgent(context.Background(), userB.User.ID, agent.Agent.ID); apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("RevokeAgent() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
 
-	if err := svc.RevokeAgent(context.Background(), ownerA.Owner.ID, agent.Agent.ID); err != nil {
-		t.Errorf("RevokeAgent() by real owner error = %v, want nil", err)
+	if err := svc.RevokeAgent(context.Background(), userA.User.ID, agent.Agent.ID); err != nil {
+		t.Errorf("RevokeAgent() by real user error = %v, want nil", err)
 	}
 }
 
@@ -671,7 +671,7 @@ func TestRevokeAgentNotFound(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	if err := svc.RevokeAgent(context.Background(), "owner-1", "missing"); apperr.KindOf(err) != apperr.KindNotFound {
+	if err := svc.RevokeAgent(context.Background(), "user-1", "missing"); apperr.KindOf(err) != apperr.KindNotFound {
 		t.Fatalf("RevokeAgent() kind = %v, want %v", apperr.KindOf(err), apperr.KindNotFound)
 	}
 }

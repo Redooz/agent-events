@@ -1,6 +1,6 @@
 package usecase
 
 type Actor struct {
-	OwnerID string
+	UserID  string
 	AgentID string
 }

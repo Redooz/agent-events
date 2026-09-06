@@ -34,27 +34,27 @@ func (a *Auth) RequireAgent(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := authctx.WithAgent(r.Context(), authctx.AgentIdentity{Agent: creds.Agent, Owner: creds.Owner})
+		ctx := authctx.WithAgent(r.Context(), authctx.AgentIdentity{Agent: creds.Agent, User: creds.User})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func (a *Auth) RequireOwner(next http.Handler) http.Handler {
+func (a *Auth) RequireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, ok := bearerToken(r)
 		if !ok {
-			handler.WriteError(w, a.log, apperr.Unauthorized("missing owner token, use Authorization: Bearer <owner token>"))
+			handler.WriteError(w, a.log, apperr.Unauthorized("missing user token, use Authorization: Bearer <user token>"))
 			return
 		}
 
-		owner, err := a.auth.AuthenticateOwner(r.Context(), raw)
+		user, err := a.auth.AuthenticateUser(r.Context(), raw)
 		if err != nil {
 			handler.WriteError(w, a.log, err)
 			return
 		}
 
-		identity := authctx.OwnerIdentity{Owner: owner, TokenHash: usecase.HashToken(raw)}
-		ctx := authctx.WithOwner(r.Context(), identity)
+		identity := authctx.UserIdentity{User: user, TokenHash: usecase.HashToken(raw)}
+		ctx := authctx.WithUser(r.Context(), identity)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

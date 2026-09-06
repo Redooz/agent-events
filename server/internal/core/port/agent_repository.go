@@ -11,7 +11,7 @@ type AgentRepository interface {
 	CreateIfUnderLimit(ctx context.Context, agent domain.Agent, max int) (bool, error)
 	Get(ctx context.Context, id string) (domain.Agent, error)
 	GetByKeyHash(ctx context.Context, keyHash string) (domain.Agent, error)
-	ListByOwner(ctx context.Context, ownerID string) ([]domain.Agent, error)
+	ListByUser(ctx context.Context, userID string) ([]domain.Agent, error)
 	Revoke(ctx context.Context, id string, revokedAt time.Time) error
 	TouchLastUsed(ctx context.Context, id string, at time.Time) error
 }

@@ -17,15 +17,15 @@ import (
 const (
 	ActionAuthExchange = "auth.exchange"
 
-	tokenPrefixOwner = "aeo_"
+	tokenPrefixUser  = "aeu_"
 	tokenPrefixAgent = "aea_"
 
 	agentTouchInterval = time.Minute
 )
 
 type AuthConfig struct {
-	OwnerTokenTTL     time.Duration
-	MaxAgentsPerOwner int
+	UserTokenTTL     time.Duration
+	MaxAgentsPerUser int
 }
 
 type ExchangeInput struct {
@@ -35,7 +35,7 @@ type ExchangeInput struct {
 }
 
 type ExchangeResult struct {
-	Owner     domain.Owner
+	User      domain.User
 	Token     string
 	ExpiresAt time.Time
 }
@@ -47,13 +47,13 @@ type AgentWithKey struct {
 
 type AgentCredentials struct {
 	Agent domain.Agent
-	Owner domain.Owner
+	User  domain.User
 }
 
 type AuthService struct {
 	verifier port.IdentityVerifier
-	owners   port.OwnerRepository
-	tokens   port.OwnerTokenRepository
+	users    port.UserRepository
+	tokens   port.UserTokenRepository
 	agents   port.AgentRepository
 	limiter  port.RateLimiter
 	logger   port.Logger
@@ -62,8 +62,8 @@ type AuthService struct {
 
 func NewAuthService(
 	verifier port.IdentityVerifier,
-	owners port.OwnerRepository,
-	tokens port.OwnerTokenRepository,
+	users port.UserRepository,
+	tokens port.UserTokenRepository,
 	agents port.AgentRepository,
 	limiter port.RateLimiter,
 	logger port.Logger,
@@ -71,7 +71,7 @@ func NewAuthService(
 ) *AuthService {
 	return &AuthService{
 		verifier: verifier,
-		owners:   owners,
+		users:    users,
 		tokens:   tokens,
 		agents:   agents,
 		limiter:  limiter,
@@ -106,69 +106,69 @@ func (s *AuthService) Exchange(ctx context.Context, in ExchangeInput) (ExchangeR
 		return ExchangeResult{}, apperr.Unauthorized("invalid or expired identity token")
 	}
 
-	owner, err := s.owners.UpsertByIdentity(ctx, identity.Provider, identity.Subject, identity.Email)
+	user, err := s.users.UpsertByIdentity(ctx, identity.Provider, identity.Subject, identity.Email)
 	if err != nil {
-		s.logger.Error("failed to upsert owner", port.Err(err), port.Str("provider", identity.Provider))
+		s.logger.Error("failed to upsert user", port.Err(err), port.Str("provider", identity.Provider))
 		return ExchangeResult{}, apperr.Wrap(err, "could not sign in")
 	}
 
-	rawToken, hash, err := newToken(tokenPrefixOwner)
+	rawToken, hash, err := newToken(tokenPrefixUser)
 	if err != nil {
-		s.logger.Error("failed to generate owner token", port.Err(err))
+		s.logger.Error("failed to generate user token", port.Err(err))
 		return ExchangeResult{}, apperr.Wrap(err, "could not sign in")
 	}
 
 	now := time.Now().UTC()
-	expiresAt := now.Add(s.config.OwnerTokenTTL)
+	expiresAt := now.Add(s.config.UserTokenTTL)
 
-	if err := s.tokens.Create(ctx, domain.OwnerToken{
+	if err := s.tokens.Create(ctx, domain.UserToken{
 		TokenHash: hash,
-		OwnerID:   owner.ID,
+		UserID:    user.ID,
 		ExpiresAt: expiresAt,
 		CreatedAt: now,
 	}); err != nil {
-		s.logger.Error("failed to store owner token", port.Err(err), port.Str("owner_id", owner.ID))
+		s.logger.Error("failed to store user token", port.Err(err), port.Str("user_id", user.ID))
 		return ExchangeResult{}, apperr.Wrap(err, "could not sign in")
 	}
 
-	s.logger.Info("owner token issued",
-		port.Str("owner_id", owner.ID),
-		port.Str("provider", owner.Provider),
+	s.logger.Info("user token issued",
+		port.Str("user_id", user.ID),
+		port.Str("provider", user.Provider),
 		port.Str("client_ip", in.ClientIP),
 	)
 
-	return ExchangeResult{Owner: owner, Token: rawToken, ExpiresAt: expiresAt}, nil
+	return ExchangeResult{User: user, Token: rawToken, ExpiresAt: expiresAt}, nil
 }
 
-func (s *AuthService) AuthenticateOwner(ctx context.Context, rawToken string) (domain.Owner, error) {
+func (s *AuthService) AuthenticateUser(ctx context.Context, rawToken string) (domain.User, error) {
 	token, err := s.tokens.GetByHash(ctx, HashToken(rawToken))
 	switch {
-	case errors.Is(err, domain.ErrOwnerTokenNotFound):
-		return domain.Owner{}, apperr.Unauthorized("invalid or expired owner token")
+	case errors.Is(err, domain.ErrUserTokenNotFound):
+		return domain.User{}, apperr.Unauthorized("invalid or expired user token")
 	case err != nil:
-		s.logger.Error("failed to fetch owner token", port.Err(err))
-		return domain.Owner{}, apperr.Wrap(err, "could not authenticate")
+		s.logger.Error("failed to fetch user token", port.Err(err))
+		return domain.User{}, apperr.Wrap(err, "could not authenticate")
 	}
 
 	if token.Expired(time.Now().UTC()) {
-		return domain.Owner{}, apperr.Unauthorized("invalid or expired owner token")
+		return domain.User{}, apperr.Unauthorized("invalid or expired user token")
 	}
 
-	owner, err := s.owners.Get(ctx, token.OwnerID)
+	user, err := s.users.Get(ctx, token.UserID)
 	switch {
-	case errors.Is(err, domain.ErrOwnerNotFound):
-		return domain.Owner{}, apperr.Unauthorized("invalid or expired owner token")
+	case errors.Is(err, domain.ErrUserNotFound):
+		return domain.User{}, apperr.Unauthorized("invalid or expired user token")
 	case err != nil:
-		s.logger.Error("failed to fetch owner for token", port.Err(err), port.Str("owner_id", token.OwnerID))
-		return domain.Owner{}, apperr.Wrap(err, "could not authenticate")
+		s.logger.Error("failed to fetch user for token", port.Err(err), port.Str("user_id", token.UserID))
+		return domain.User{}, apperr.Wrap(err, "could not authenticate")
 	}
 
-	return owner, nil
+	return user, nil
 }
 
-func (s *AuthService) RevokeOwnerToken(ctx context.Context, tokenHash string) error {
+func (s *AuthService) RevokeUserToken(ctx context.Context, tokenHash string) error {
 	if err := s.tokens.DeleteByHash(ctx, tokenHash); err != nil {
-		s.logger.Error("failed to revoke owner token", port.Err(err))
+		s.logger.Error("failed to revoke user token", port.Err(err))
 		return apperr.Wrap(err, "could not log out")
 	}
 
@@ -186,17 +186,17 @@ func (s *AuthService) AuthenticateAgent(ctx context.Context, rawKey string) (Age
 	}
 
 	if agent.Revoked() {
-		s.logger.Warn("revoked agent key used", port.Str("agent_id", agent.ID), port.Str("owner_id", agent.OwnerID))
+		s.logger.Warn("revoked agent key used", port.Str("agent_id", agent.ID), port.Str("user_id", agent.UserID))
 		return AgentCredentials{}, apperr.Unauthorized("agent key has been revoked")
 	}
 
-	owner, err := s.owners.Get(ctx, agent.OwnerID)
+	user, err := s.users.Get(ctx, agent.UserID)
 	switch {
-	case errors.Is(err, domain.ErrOwnerNotFound):
-		s.logger.Error("agent references missing owner", port.Str("agent_id", agent.ID), port.Str("owner_id", agent.OwnerID))
+	case errors.Is(err, domain.ErrUserNotFound):
+		s.logger.Error("agent references missing user", port.Str("agent_id", agent.ID), port.Str("user_id", agent.UserID))
 		return AgentCredentials{}, apperr.Unauthorized("invalid agent key")
 	case err != nil:
-		s.logger.Error("failed to fetch agent owner", port.Err(err), port.Str("agent_id", agent.ID))
+		s.logger.Error("failed to fetch agent user", port.Err(err), port.Str("agent_id", agent.ID))
 		return AgentCredentials{}, apperr.Wrap(err, "could not authenticate")
 	}
 
@@ -207,19 +207,19 @@ func (s *AuthService) AuthenticateAgent(ctx context.Context, rawKey string) (Age
 		}
 	}
 
-	return AgentCredentials{Agent: agent, Owner: owner}, nil
+	return AgentCredentials{Agent: agent, User: user}, nil
 }
 
-func (s *AuthService) CreateAgent(ctx context.Context, ownerID, name string) (AgentWithKey, error) {
+func (s *AuthService) CreateAgent(ctx context.Context, userID, name string) (AgentWithKey, error) {
 	agent := domain.Agent{
 		ID:        newID(),
-		OwnerID:   ownerID,
+		UserID:    userID,
 		Name:      name,
 		CreatedAt: time.Now().UTC(),
 	}
 
 	if err := agent.Validate(); err != nil {
-		s.logger.Warn("agent rejected", port.Err(err), port.Str("owner_id", ownerID))
+		s.logger.Warn("agent rejected", port.Err(err), port.Str("user_id", userID))
 		return AgentWithKey{}, apperr.Invalid(err.Error())
 	}
 
@@ -231,33 +231,33 @@ func (s *AuthService) CreateAgent(ctx context.Context, ownerID, name string) (Ag
 
 	agent.KeyHash = hash
 
-	created, err := s.agents.CreateIfUnderLimit(ctx, agent, s.config.MaxAgentsPerOwner)
+	created, err := s.agents.CreateIfUnderLimit(ctx, agent, s.config.MaxAgentsPerUser)
 	if err != nil {
-		s.logger.Error("failed to store agent", port.Err(err), port.Str("owner_id", ownerID))
+		s.logger.Error("failed to store agent", port.Err(err), port.Str("user_id", userID))
 		return AgentWithKey{}, apperr.Wrap(err, "could not create agent")
 	}
 
 	if !created {
-		s.logger.Warn("agent limit reached", port.Str("owner_id", ownerID), port.Int("max_agents", s.config.MaxAgentsPerOwner))
+		s.logger.Warn("agent limit reached", port.Str("user_id", userID), port.Int("max_agents", s.config.MaxAgentsPerUser))
 		return AgentWithKey{}, apperr.Forbidden("agent limit reached, revoke an agent first")
 	}
 
-	s.logger.Info("agent created", port.Str("agent_id", agent.ID), port.Str("owner_id", ownerID))
+	s.logger.Info("agent created", port.Str("agent_id", agent.ID), port.Str("user_id", userID))
 
 	return AgentWithKey{Agent: agent, Key: rawKey}, nil
 }
 
-func (s *AuthService) ListAgents(ctx context.Context, ownerID string) ([]domain.Agent, error) {
-	agents, err := s.agents.ListByOwner(ctx, ownerID)
+func (s *AuthService) ListAgents(ctx context.Context, userID string) ([]domain.Agent, error) {
+	agents, err := s.agents.ListByUser(ctx, userID)
 	if err != nil {
-		s.logger.Error("failed to list agents", port.Err(err), port.Str("owner_id", ownerID))
+		s.logger.Error("failed to list agents", port.Err(err), port.Str("user_id", userID))
 		return nil, apperr.Wrap(err, "could not list agents")
 	}
 
 	return agents, nil
 }
 
-func (s *AuthService) RevokeAgent(ctx context.Context, ownerID, agentID string) error {
+func (s *AuthService) RevokeAgent(ctx context.Context, userID, agentID string) error {
 	agent, err := s.agents.Get(ctx, agentID)
 	switch {
 	case errors.Is(err, domain.ErrAgentNotFound):
@@ -267,11 +267,11 @@ func (s *AuthService) RevokeAgent(ctx context.Context, ownerID, agentID string) 
 		return apperr.Wrap(err, "could not revoke agent")
 	}
 
-	if agent.OwnerID != ownerID {
-		s.logger.Warn("agent revoke denied for non-owner",
+	if agent.UserID != userID {
+		s.logger.Warn("agent revoke denied for non-user",
 			port.Str("agent_id", agentID),
-			port.Str("requesting_owner_id", ownerID),
-			port.Str("agent_owner_id", agent.OwnerID),
+			port.Str("requesting_user_id", userID),
+			port.Str("agent_user_id", agent.UserID),
 		)
 		return apperr.Forbidden("agent does not belong to you")
 	}
@@ -285,7 +285,7 @@ func (s *AuthService) RevokeAgent(ctx context.Context, ownerID, agentID string) 
 		return apperr.Wrap(err, "could not revoke agent")
 	}
 
-	s.logger.Info("agent revoked", port.Str("agent_id", agentID), port.Str("owner_id", ownerID))
+	s.logger.Info("agent revoked", port.Str("agent_id", agentID), port.Str("user_id", userID))
 
 	return nil
 }

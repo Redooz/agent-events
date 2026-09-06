@@ -23,8 +23,8 @@ type Config struct {
 	MicrosoftClientID string
 	MicrosoftTenant   string
 
-	OwnerTokenTTL     time.Duration
-	MaxAgentsPerOwner int
+	UserTokenTTL     time.Duration
+	MaxAgentsPerUser int
 
 	RateLimitEventsPerDay    int
 	RateLimitExchangePerHour int
@@ -41,8 +41,8 @@ func Load() (Config, error) {
 	v.SetDefault("env", "development")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("microsoft_tenant", "common")
-	v.SetDefault("owner_token_ttl_hours", 720)
-	v.SetDefault("max_agents_per_owner", 10)
+	v.SetDefault("user_token_ttl_hours", 720)
+	v.SetDefault("max_agents_per_user", 10)
 	v.SetDefault("rate_limit_events_per_day", 20)
 	v.SetDefault("rate_limit_exchange_per_hour", 30)
 
@@ -60,8 +60,8 @@ func Load() (Config, error) {
 		AppleClientID:     v.GetString("apple_client_id"),
 		MicrosoftClientID: v.GetString("microsoft_client_id"),
 		MicrosoftTenant:   v.GetString("microsoft_tenant"),
-		OwnerTokenTTL:     time.Duration(v.GetInt("owner_token_ttl_hours")) * time.Hour,
-		MaxAgentsPerOwner: v.GetInt("max_agents_per_owner"),
+		UserTokenTTL:      time.Duration(v.GetInt("user_token_ttl_hours")) * time.Hour,
+		MaxAgentsPerUser:  v.GetInt("max_agents_per_user"),
 
 		RateLimitEventsPerDay:    v.GetInt("rate_limit_events_per_day"),
 		RateLimitExchangePerHour: v.GetInt("rate_limit_exchange_per_hour"),
@@ -88,18 +88,16 @@ func (c Config) Validate() error {
 		}
 	}
 
-	if c.IsProduction() {
-		if c.DatabaseURL == "" {
-			return fmt.Errorf("DATABASE_URL is required in production")
-		}
+	if c.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
 	}
 
-	if c.OwnerTokenTTL <= 0 {
-		return fmt.Errorf("OWNER_TOKEN_TTL_HOURS must be positive, got %d", c.OwnerTokenTTL/time.Hour)
+	if c.UserTokenTTL <= 0 {
+		return fmt.Errorf("USER_TOKEN_TTL_HOURS must be positive, got %d", c.UserTokenTTL/time.Hour)
 	}
 
-	if c.MaxAgentsPerOwner < 1 {
-		return fmt.Errorf("MAX_AGENTS_PER_OWNER must be at least 1, got %d", c.MaxAgentsPerOwner)
+	if c.MaxAgentsPerUser < 1 {
+		return fmt.Errorf("MAX_AGENTS_PER_USER must be at least 1, got %d", c.MaxAgentsPerUser)
 	}
 
 	if c.RateLimitEventsPerDay < 1 {
