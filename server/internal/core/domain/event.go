@@ -13,7 +13,7 @@ var (
 
 type Event struct {
 	ID          string
-	OwnerID     string
+	UserID      string
 	Name        string
 	Description string
 	CreatedAt   time.Time

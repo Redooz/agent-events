@@ -19,11 +19,11 @@ func ValidProvider(provider string) bool {
 }
 
 var (
-	ErrOwnerNotFound      = errors.New("owner not found")
-	ErrOwnerTokenNotFound = errors.New("owner token not found")
+	ErrUserNotFound      = errors.New("user not found")
+	ErrUserTokenNotFound = errors.New("user token not found")
 )
 
-type Owner struct {
+type User struct {
 	ID        string
 	Provider  string
 	Subject   string
@@ -31,14 +31,14 @@ type Owner struct {
 	CreatedAt time.Time
 }
 
-type OwnerToken struct {
+type UserToken struct {
 	TokenHash string
-	OwnerID   string
+	UserID    string
 	ExpiresAt time.Time
 	CreatedAt time.Time
 }
 
-func (t OwnerToken) Expired(at time.Time) bool {
+func (t UserToken) Expired(at time.Time) bool {
 	return !at.Before(t.ExpiresAt)
 }
 

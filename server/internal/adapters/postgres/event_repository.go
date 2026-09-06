@@ -2,26 +2,30 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"agent-events/server/internal/adapters/postgres/gen"
 	"agent-events/server/internal/core/domain"
 )
 
 type EventRepository struct {
-	db *sql.DB
+	q *gen.Queries
 }
 
-func NewEventRepository(db *sql.DB) *EventRepository {
-	return &EventRepository{db: db}
+func NewEventRepository(pool *pgxpool.Pool) *EventRepository {
+	return &EventRepository{q: gen.New(pool)}
 }
 
 func (r *EventRepository) Save(ctx context.Context, event domain.Event) (domain.Event, error) {
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO events (id, owner_id, name, description, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		event.ID, event.OwnerID, event.Name, event.Description, event.CreatedAt, event.UpdatedAt,
-	)
+	err := r.q.InsertEvent(ctx, gen.InsertEventParams{
+		ID:          event.ID,
+		UserID:      event.UserID,
+		Name:        event.Name,
+		Description: event.Description,
+		CreatedAt:   timestamptz(event.CreatedAt),
+		UpdatedAt:   timestamptz(event.UpdatedAt),
+	})
 	if err != nil {
 		return domain.Event{}, err
 	}
@@ -30,51 +34,35 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) (domain.
 }
 
 func (r *EventRepository) Get(ctx context.Context, id string) (domain.Event, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, owner_id, name, description, created_at, updated_at
-		FROM events
-		WHERE id = $1`,
-		id,
-	)
+	row, err := r.q.GetEventByID(ctx, id)
+	if err != nil {
+		return domain.Event{}, asNotFound(err, domain.ErrEventNotFound)
+	}
 
-	return scanEvent(row)
+	return eventFromRow(row), nil
 }
 
 func (r *EventRepository) List(ctx context.Context) ([]domain.Event, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, owner_id, name, description, created_at, updated_at
-		FROM events
-		ORDER BY created_at`)
+	rows, err := r.q.ListEvents(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
-	events := make([]domain.Event, 0)
-	for rows.Next() {
-		event, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		events = append(events, event)
+	events := make([]domain.Event, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, eventFromRow(row))
 	}
 
-	return events, rows.Err()
+	return events, nil
 }
 
 func (r *EventRepository) Update(ctx context.Context, event domain.Event) (domain.Event, error) {
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE events
-		SET name = $2, description = $3, updated_at = $4
-		WHERE id = $1`,
-		event.ID, event.Name, event.Description, event.UpdatedAt,
-	)
-	if err != nil {
-		return domain.Event{}, err
-	}
-
-	affected, err := result.RowsAffected()
+	affected, err := r.q.UpdateEvent(ctx, gen.UpdateEventParams{
+		ID:          event.ID,
+		Name:        event.Name,
+		Description: event.Description,
+		UpdatedAt:   timestamptz(event.UpdatedAt),
+	})
 	if err != nil {
 		return domain.Event{}, err
 	}
@@ -87,12 +75,7 @@ func (r *EventRepository) Update(ctx context.Context, event domain.Event) (domai
 }
 
 func (r *EventRepository) Delete(ctx context.Context, id string) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-
-	affected, err := result.RowsAffected()
+	affected, err := r.q.DeleteEvent(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -104,16 +87,13 @@ func (r *EventRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func scanEvent(row interface{ Scan(dest ...any) error }) (domain.Event, error) {
-	var event domain.Event
-
-	if err := row.Scan(&event.ID, &event.OwnerID, &event.Name, &event.Description, &event.CreatedAt, &event.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || isInvalidInputSyntax(err) {
-			return domain.Event{}, domain.ErrEventNotFound
-		}
-
-		return domain.Event{}, err
+func eventFromRow(row gen.Event) domain.Event {
+	return domain.Event{
+		ID:          row.ID,
+		UserID:      row.UserID,
+		Name:        row.Name,
+		Description: row.Description,
+		CreatedAt:   timeFromTimestamptz(row.CreatedAt),
+		UpdatedAt:   timeFromTimestamptz(row.UpdatedAt),
 	}
-
-	return event, nil
 }

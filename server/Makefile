@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: all build run test lint fmt tidy db-up db-down
+.PHONY: all build run test lint fmt gen tidy db-up db-down
 
 all: lint test build
 
@@ -18,6 +18,9 @@ lint:
 
 fmt:
 	golangci-lint fmt
+
+gen:
+	sqlc generate
 
 tidy:
 	$(GO) mod tidy

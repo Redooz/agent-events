@@ -2,122 +2,90 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"agent-events/server/internal/adapters/postgres/gen"
 	"agent-events/server/internal/core/domain"
 )
 
 type AgentRepository struct {
-	db *sql.DB
+	pool *pgxpool.Pool
+	q    *gen.Queries
 }
 
-func NewAgentRepository(db *sql.DB) *AgentRepository {
-	return &AgentRepository{db: db}
+func NewAgentRepository(pool *pgxpool.Pool) *AgentRepository {
+	return &AgentRepository{pool: pool, q: gen.New(pool)}
 }
 
 func (r *AgentRepository) CreateIfUnderLimit(ctx context.Context, agent domain.Agent, max int) (bool, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	var ownerID string
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM owners WHERE id = $1 FOR UPDATE`, agent.OwnerID).Scan(&ownerID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, domain.ErrOwnerNotFound
-		}
+	qtx := r.q.WithTx(tx)
 
+	if _, err := qtx.LockUserForUpdate(ctx, agent.UserID); err != nil {
+		return false, asNotFound(err, domain.ErrUserNotFound)
+	}
+
+	count, err := qtx.CountActiveAgentsByUser(ctx, agent.UserID)
+	if err != nil {
 		return false, err
 	}
 
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE owner_id = $1 AND revoked_at IS NULL`, agent.OwnerID).Scan(&count); err != nil {
-		return false, err
-	}
-
-	if count >= max {
+	if int(count) >= max {
 		return false, nil
 	}
 
-	var revokedAt sql.NullTime
-	if !agent.RevokedAt.IsZero() {
-		revokedAt = sql.NullTime{Time: agent.RevokedAt, Valid: true}
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO agents (id, owner_id, name, key_hash, created_at, revoked_at, last_used_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		agent.ID, agent.OwnerID, agent.Name, agent.KeyHash, agent.CreatedAt, revokedAt, agent.LastUsedAt,
-	); err != nil {
+	if err := qtx.InsertAgent(ctx, insertAgentParams(agent)); err != nil {
 		return false, err
 	}
 
-	return true, tx.Commit()
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (r *AgentRepository) Get(ctx context.Context, id string) (domain.Agent, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, owner_id, name, key_hash, created_at, revoked_at, last_used_at
-		FROM agents
-		WHERE id = $1`,
-		id,
-	)
+	row, err := r.q.GetAgentByID(ctx, id)
+	if err != nil {
+		return domain.Agent{}, asNotFound(err, domain.ErrAgentNotFound)
+	}
 
-	return scanAgent(row)
+	return agentFromRow(row), nil
 }
 
 func (r *AgentRepository) GetByKeyHash(ctx context.Context, keyHash string) (domain.Agent, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, owner_id, name, key_hash, created_at, revoked_at, last_used_at
-		FROM agents
-		WHERE key_hash = $1`,
-		keyHash,
-	)
+	row, err := r.q.GetAgentByKeyHash(ctx, keyHash)
+	if err != nil {
+		return domain.Agent{}, asNotFound(err, domain.ErrAgentNotFound)
+	}
 
-	return scanAgent(row)
+	return agentFromRow(row), nil
 }
 
-func (r *AgentRepository) ListByOwner(ctx context.Context, ownerID string) ([]domain.Agent, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, owner_id, name, key_hash, created_at, revoked_at, last_used_at
-		FROM agents
-		WHERE owner_id = $1
-		ORDER BY created_at`,
-		ownerID,
-	)
+func (r *AgentRepository) ListByUser(ctx context.Context, userID string) ([]domain.Agent, error) {
+	rows, err := r.q.ListAgentsByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
-	agents := make([]domain.Agent, 0)
-	for rows.Next() {
-		agent, err := scanAgent(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		agents = append(agents, agent)
+	agents := make([]domain.Agent, 0, len(rows))
+	for _, row := range rows {
+		agents = append(agents, agentFromRow(row))
 	}
 
-	return agents, rows.Err()
+	return agents, nil
 }
 
 func (r *AgentRepository) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE agents
-		SET revoked_at = $2
-		WHERE id = $1 AND revoked_at IS NULL`,
-		id, revokedAt,
-	)
-	if err != nil {
-		return err
-	}
-
-	affected, err := result.RowsAffected()
+	affected, err := r.q.RevokeAgent(ctx, gen.RevokeAgentParams{ID: id, RevokedAt: timestamptz(revokedAt)})
 	if err != nil {
 		return err
 	}
@@ -132,33 +100,29 @@ func (r *AgentRepository) Revoke(ctx context.Context, id string, revokedAt time.
 }
 
 func (r *AgentRepository) TouchLastUsed(ctx context.Context, id string, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE agents SET last_used_at = $2 WHERE id = $1`, id, at)
-
-	return err
+	return r.q.TouchAgentLastUsed(ctx, gen.TouchAgentLastUsedParams{ID: id, LastUsedAt: timestamptz(at)})
 }
 
-func scanAgent(row interface{ Scan(dest ...any) error }) (domain.Agent, error) {
-	var (
-		agent      domain.Agent
-		revokedAt  sql.NullTime
-		lastUsedAt sql.NullTime
-	)
-
-	if err := row.Scan(&agent.ID, &agent.OwnerID, &agent.Name, &agent.KeyHash, &agent.CreatedAt, &revokedAt, &lastUsedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || isInvalidInputSyntax(err) {
-			return domain.Agent{}, domain.ErrAgentNotFound
-		}
-
-		return domain.Agent{}, err
+func insertAgentParams(agent domain.Agent) gen.InsertAgentParams {
+	return gen.InsertAgentParams{
+		ID:         agent.ID,
+		UserID:     agent.UserID,
+		Name:       agent.Name,
+		KeyHash:    agent.KeyHash,
+		CreatedAt:  timestamptz(agent.CreatedAt),
+		RevokedAt:  timestamptz(agent.RevokedAt),
+		LastUsedAt: timestamptz(agent.LastUsedAt),
 	}
+}
 
-	if revokedAt.Valid {
-		agent.RevokedAt = revokedAt.Time
+func agentFromRow(row gen.Agent) domain.Agent {
+	return domain.Agent{
+		ID:         row.ID,
+		UserID:     row.UserID,
+		Name:       row.Name,
+		KeyHash:    row.KeyHash,
+		CreatedAt:  timeFromTimestamptz(row.CreatedAt),
+		RevokedAt:  timeFromTimestamptz(row.RevokedAt),
+		LastUsedAt: timeFromTimestamptz(row.LastUsedAt),
 	}
-
-	if lastUsedAt.Valid {
-		agent.LastUsedAt = lastUsedAt.Time
-	}
-
-	return agent, nil
 }

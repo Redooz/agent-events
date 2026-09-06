@@ -61,17 +61,17 @@ type testStack struct {
 func newTestStack(t *testing.T, limits stackLimits) *testStack {
 	t.Helper()
 
-	eventsRepo := memory.NewEventRepository()
-	owners := memory.NewOwnerRepository()
-	tokens := memory.NewOwnerTokenRepository()
-	agents := memory.NewAgentRepository()
+	eventsRepo := newFakeEventRepo()
+	users := newFakeUserRepo()
+	tokens := newFakeUserTokenRepo()
+	agents := newFakeAgentRepo()
 	limiter := memory.NewRateLimiter(map[string]memory.Limit{
 		usecase.ActionCreateEvent:  {Max: limits.eventsPerDay, Window: 24 * time.Hour},
 		usecase.ActionAuthExchange: {Max: limits.exchangePerHour, Window: time.Hour},
 	})
-	authCfg := usecase.AuthConfig{OwnerTokenTTL: time.Hour, MaxAgentsPerOwner: limits.maxAgents}
+	authCfg := usecase.AuthConfig{UserTokenTTL: time.Hour, MaxAgentsPerUser: limits.maxAgents}
 
-	authSvc := usecase.NewAuthService(fakeVerifier{}, owners, tokens, agents, limiter, noopLogger{}, authCfg)
+	authSvc := usecase.NewAuthService(fakeVerifier{}, users, tokens, agents, limiter, noopLogger{}, authCfg)
 	eventSvc := usecase.NewEventService(eventsRepo, limiter, noopLogger{})
 
 	eventHandler := handler.NewEventHandler(eventSvc, noopLogger{})
@@ -117,11 +117,11 @@ func (s *testStack) exchange(t *testing.T, subject string) string {
 	return payload.Token
 }
 
-func (s *testStack) createAgent(t *testing.T, ownerToken, name string) (string, string) {
+func (s *testStack) createAgent(t *testing.T, userToken, name string) (string, string) {
 	t.Helper()
 
 	body := fmt.Sprintf(`{"name":%q}`, name)
-	rec := s.do(t, http.MethodPost, "/api/v1/agents", body, ownerToken)
+	rec := s.do(t, http.MethodPost, "/api/v1/agents", body, userToken)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create agent = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
 	}
@@ -137,8 +137,8 @@ func (s *testStack) createAgent(t *testing.T, ownerToken, name string) (string, 
 func (s *testStack) agentKeyFor(t *testing.T, subject string) string {
 	t.Helper()
 
-	ownerToken := s.exchange(t, subject)
-	_, key := s.createAgent(t, ownerToken, "agent-"+subject)
+	userToken := s.exchange(t, subject)
+	_, key := s.createAgent(t, userToken, "agent-"+subject)
 
 	return key
 }
@@ -176,15 +176,15 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) handler.ErrorResp
 	return payload
 }
 
-func TestCreateReturnsCreatedEventWithOwner(t *testing.T) {
+func TestCreateReturnsCreatedEventWithUser(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
 	key := stack.agentKeyFor(t, "alice")
 
 	event := stack.createEvent(t, key, "deploy")
-	if event.ID == "" || event.OwnerID == "" {
-		t.Errorf("event = %+v, want id and owner_id", event)
+	if event.ID == "" || event.UserID == "" {
+		t.Errorf("event = %+v, want id and user_id", event)
 	}
 
 	if event.Name != "deploy" {
@@ -218,19 +218,19 @@ func TestEventsRequireAgentKey(t *testing.T) {
 	}
 }
 
-func TestOwnerTokenCannotActAsAgent(t *testing.T) {
+func TestUserTokenCannotActAsAgent(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
-	ownerToken := stack.exchange(t, "alice")
+	userToken := stack.exchange(t, "alice")
 
-	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, ownerToken)
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"x"}`, userToken)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestAgentsRequireOwnerToken(t *testing.T) {
+func TestAgentsRequireUserToken(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
@@ -247,7 +247,7 @@ func TestAgentsRequireOwnerToken(t *testing.T) {
 	}
 }
 
-func TestExchangeReturnsUniformResponseForNewAndExistingOwners(t *testing.T) {
+func TestExchangeReturnsUniformResponseForNewAndExistingUsers(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
@@ -263,12 +263,12 @@ func TestExchangeReturnsUniformResponseForNewAndExistingOwners(t *testing.T) {
 	_ = json.Unmarshal(first.Body.Bytes(), &a)
 	_ = json.Unmarshal(second.Body.Bytes(), &b)
 
-	if a.Owner.ID != b.Owner.ID {
-		t.Errorf("owner ids differ: %q vs %q", a.Owner.ID, b.Owner.ID)
+	if a.User.ID != b.User.ID {
+		t.Errorf("user ids differ: %q vs %q", a.User.ID, b.User.ID)
 	}
 
-	if a.Owner.Email == "" {
-		t.Error("owner email is empty")
+	if a.User.Email == "" {
+		t.Error("user email is empty")
 	}
 }
 
@@ -304,7 +304,7 @@ func TestExchangeRateLimitedPerIP(t *testing.T) {
 	}
 }
 
-func TestCreateEventRateLimitedPerOwner(t *testing.T) {
+func TestCreateEventRateLimitedPerUser(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, stackLimits{eventsPerDay: 1, exchangePerHour: 100, maxAgents: 10})
@@ -320,26 +320,26 @@ func TestCreateEventRateLimitedPerOwner(t *testing.T) {
 	otherKey := stack.agentKeyFor(t, "bob")
 	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"three"}`, otherKey)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("other owner status = %d, want %d", rec.Code, http.StatusCreated)
+		t.Fatalf("other user status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 }
 
-func TestAgentLimitPerOwner(t *testing.T) {
+func TestAgentLimitPerUser(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, stackLimits{eventsPerDay: 100, exchangePerHour: 100, maxAgents: 2})
-	ownerToken := stack.exchange(t, "alice")
+	userToken := stack.exchange(t, "alice")
 
-	stack.createAgent(t, ownerToken, "one")
-	stack.createAgent(t, ownerToken, "two")
+	stack.createAgent(t, userToken, "one")
+	stack.createAgent(t, userToken, "two")
 
-	rec := stack.do(t, http.MethodPost, "/api/v1/agents", `{"name":"three"}`, ownerToken)
+	rec := stack.do(t, http.MethodPost, "/api/v1/agents", `{"name":"three"}`, userToken)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
-func TestCrossOwnerEventAccessIsForbidden(t *testing.T) {
+func TestCrossUserEventAccessIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
@@ -360,16 +360,16 @@ func TestCrossOwnerEventAccessIsForbidden(t *testing.T) {
 
 	rec = stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"renamed"}`, aliceKey)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("update by owner = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+		t.Fatalf("update by user = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
 	rec = stack.do(t, http.MethodDelete, "/api/v1/events/"+event.ID, "", aliceKey)
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete by owner = %d, want %d", rec.Code, http.StatusNoContent)
+		t.Fatalf("delete by user = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 }
 
-func TestCrossOwnerAgentRevokeIsForbidden(t *testing.T) {
+func TestCrossUserAgentRevokeIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
@@ -380,7 +380,7 @@ func TestCrossOwnerAgentRevokeIsForbidden(t *testing.T) {
 
 	rec := stack.do(t, http.MethodDelete, "/api/v1/agents/"+agentID, "", bobToken)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("revoke by foreign owner = %d, want %d", rec.Code, http.StatusForbidden)
+		t.Fatalf("revoke by foreign user = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 
 	rec = stack.do(t, http.MethodGet, "/api/v1/agents", "", aliceToken)
@@ -399,7 +399,7 @@ func TestCrossOwnerAgentRevokeIsForbidden(t *testing.T) {
 
 	rec = stack.do(t, http.MethodDelete, "/api/v1/agents/"+agentID, "", aliceToken)
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("revoke by owner = %d, want %d", rec.Code, http.StatusNoContent)
+		t.Fatalf("revoke by user = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 
 	rec = stack.do(t, http.MethodGet, "/api/v1/events", "", agentKey)
@@ -433,7 +433,7 @@ func TestListAgentsOnlyShowsOwn(t *testing.T) {
 	}
 }
 
-func TestWhoamiReturnsAgentAndOwner(t *testing.T) {
+func TestWhoamiReturnsAgentAndUser(t *testing.T) {
 	t.Parallel()
 
 	stack := newTestStack(t, defaultLimits())
@@ -449,8 +449,8 @@ func TestWhoamiReturnsAgentAndOwner(t *testing.T) {
 		t.Fatalf("decode whoami: %v", err)
 	}
 
-	if payload.Owner.Email != "alice@example.com" {
-		t.Errorf("owner email = %q, want alice@example.com", payload.Owner.Email)
+	if payload.User.Email != "alice@example.com" {
+		t.Errorf("user email = %q, want alice@example.com", payload.User.Email)
 	}
 
 	if payload.Agent.Name == "" {
@@ -488,7 +488,7 @@ func TestGetAndListEventsWithAgentKey(t *testing.T) {
 	}
 
 	if len(events) != 2 {
-		t.Errorf("list returned %d events, want 2 (events are discoverable across owners)", len(events))
+		t.Errorf("list returned %d events, want 2 (events are discoverable across users)", len(events))
 	}
 
 	rec = stack.do(t, http.MethodGet, "/api/v1/events/missing", "", aliceKey)
@@ -502,7 +502,7 @@ func TestMalformedIDsReturnNotFound(t *testing.T) {
 
 	stack := newTestStack(t, defaultLimits())
 	key := stack.agentKeyFor(t, "alice")
-	ownerToken := stack.exchange(t, "alice")
+	userToken := stack.exchange(t, "alice")
 
 	rec := stack.do(t, http.MethodGet, "/api/v1/events/not-a-uuid", "", key)
 	if rec.Code != http.StatusNotFound {
@@ -519,7 +519,7 @@ func TestMalformedIDsReturnNotFound(t *testing.T) {
 		t.Fatalf("delete event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 
-	rec = stack.do(t, http.MethodDelete, "/api/v1/agents/not-a-uuid", "", ownerToken)
+	rec = stack.do(t, http.MethodDelete, "/api/v1/agents/not-a-uuid", "", userToken)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("revoke agent with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
 	}

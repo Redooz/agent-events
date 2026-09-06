@@ -56,7 +56,7 @@ func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Create(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, req.ToInput())
+	event, err := h.svc.Create(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -114,7 +114,7 @@ func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Update(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
+	event, err := h.svc.Update(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -136,7 +136,7 @@ func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), usecase.Actor{OwnerID: actor.Owner.ID, AgentID: actor.Agent.ID}, id); err != nil {
+	if err := h.svc.Delete(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}

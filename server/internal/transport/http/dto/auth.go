@@ -13,7 +13,7 @@ type ExchangeRequest struct {
 	IDToken  string `json:"id_token" validate:"required"`
 }
 
-type OwnerResponse struct {
+type UserResponse struct {
 	ID        string    `json:"id"`
 	Provider  string    `json:"provider"`
 	Email     string    `json:"email"`
@@ -21,17 +21,17 @@ type OwnerResponse struct {
 }
 
 type ExchangeResponse struct {
-	Token     string        `json:"token"`
-	ExpiresAt time.Time     `json:"expires_at"`
-	Owner     OwnerResponse `json:"owner"`
+	Token     string       `json:"token"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	User      UserResponse `json:"user"`
 }
 
-func NewOwnerResponse(owner domain.Owner) OwnerResponse {
-	return OwnerResponse{
-		ID:        owner.ID,
-		Provider:  owner.Provider,
-		Email:     owner.Email,
-		CreatedAt: owner.CreatedAt,
+func NewUserResponse(user domain.User) UserResponse {
+	return UserResponse{
+		ID:        user.ID,
+		Provider:  user.Provider,
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt,
 	}
 }
 

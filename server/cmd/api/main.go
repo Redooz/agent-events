@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	shutdownTimeout        = 10 * time.Second
-	providerTimeout        = 15 * time.Second
-	ownerTokenCleanupEvery = time.Hour
+	shutdownTimeout       = 10 * time.Second
+	providerTimeout       = 15 * time.Second
+	userTokenCleanupEvery = time.Hour
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 		),
 		fx.Invoke(
 			func(*http.Server) {},
-			provideOwnerTokenCleanup,
+			provideUserTokenCleanup,
 		),
 	).Run()
 }
@@ -94,12 +94,12 @@ func provideRateLimiter(cfg config.Config) *memory.RateLimiter {
 
 func provideAuthConfig(cfg config.Config) usecase.AuthConfig {
 	return usecase.AuthConfig{
-		OwnerTokenTTL:     cfg.OwnerTokenTTL,
-		MaxAgentsPerOwner: cfg.MaxAgentsPerOwner,
+		UserTokenTTL:     cfg.UserTokenTTL,
+		MaxAgentsPerUser: cfg.MaxAgentsPerUser,
 	}
 }
 
-func provideOwnerTokenCleanup(lc fx.Lifecycle, tokens port.OwnerTokenRepository, log port.Logger) {
+func provideUserTokenCleanup(lc fx.Lifecycle, tokens port.UserTokenRepository, log port.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	lc.Append(fx.Hook{
@@ -116,13 +116,13 @@ func provideOwnerTokenCleanup(lc fx.Lifecycle, tokens port.OwnerTokenRepository,
 	})
 }
 
-func cleanupExpiredTokens(ctx context.Context, tokens port.OwnerTokenRepository, log port.Logger) {
-	ticker := time.NewTicker(ownerTokenCleanupEvery)
+func cleanupExpiredTokens(ctx context.Context, tokens port.UserTokenRepository, log port.Logger) {
+	ticker := time.NewTicker(userTokenCleanupEvery)
 	defer ticker.Stop()
 
 	for {
 		if err := tokens.DeleteExpired(ctx); err != nil && ctx.Err() == nil {
-			log.Error("expired owner token cleanup failed", port.Err(err))
+			log.Error("expired user token cleanup failed", port.Err(err))
 		}
 
 		select {
@@ -135,42 +135,34 @@ func cleanupExpiredTokens(ctx context.Context, tokens port.OwnerTokenRepository,
 
 func provideRepositories(lc fx.Lifecycle, cfg config.Config, log port.Logger) (
 	port.EventRepository,
-	port.OwnerRepository,
-	port.OwnerTokenRepository,
+	port.UserRepository,
+	port.UserTokenRepository,
 	port.AgentRepository,
 	error,
 ) {
-	if cfg.DatabaseURL == "" {
-		log.Info("using in-memory storage, set DATABASE_URL for persistence (data is lost on restart)")
-
-		return memory.NewEventRepository(),
-			memory.NewOwnerRepository(),
-			memory.NewOwnerTokenRepository(),
-			memory.NewAgentRepository(),
-			nil
-	}
-
-	db, err := postgres.Open(cfg.DatabaseURL)
+	pool, err := postgres.Open(cfg.DatabaseURL)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
 	lc.Append(fx.Hook{
 		OnStop: func(context.Context) error {
-			return db.Close()
+			pool.Close()
+
+			return nil
 		},
 	})
 
-	if err := postgres.Migrate(db); err != nil {
+	if err := postgres.Migrate(pool); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
 	log.Info("postgres storage ready")
 
-	return postgres.NewEventRepository(db),
-		postgres.NewOwnerRepository(db),
-		postgres.NewOwnerTokenRepository(db),
-		postgres.NewAgentRepository(db),
+	return postgres.NewEventRepository(pool),
+		postgres.NewUserRepository(pool),
+		postgres.NewUserTokenRepository(pool),
+		postgres.NewAgentRepository(pool),
 		nil
 }
 

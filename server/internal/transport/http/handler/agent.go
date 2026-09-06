@@ -35,7 +35,7 @@ func (h *AgentHandler) Register(r chi.Router) {
 }
 
 func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
-	identity, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.UserFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
@@ -51,7 +51,7 @@ func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.svc.CreateAgent(r.Context(), identity.Owner.ID, req.Name)
+	result, err := h.svc.CreateAgent(r.Context(), identity.User.ID, req.Name)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -64,13 +64,13 @@ func (h *AgentHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) list(w http.ResponseWriter, r *http.Request) {
-	identity, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.UserFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
 	}
 
-	agents, err := h.svc.ListAgents(r.Context(), identity.Owner.ID)
+	agents, err := h.svc.ListAgents(r.Context(), identity.User.ID)
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -80,7 +80,7 @@ func (h *AgentHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) revoke(w http.ResponseWriter, r *http.Request) {
-	identity, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.UserFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
@@ -92,7 +92,7 @@ func (h *AgentHandler) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RevokeAgent(r.Context(), identity.Owner.ID, id); err != nil {
+	if err := h.svc.RevokeAgent(r.Context(), identity.User.ID, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}

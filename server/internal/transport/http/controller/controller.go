@@ -36,7 +36,7 @@ func NewRouter(
 		r.Post("/auth/exchange", authHandler.Exchange)
 
 		r.Group(func(r chi.Router) {
-			r.Use(auth.RequireOwner)
+			r.Use(auth.RequireUser)
 			r.Delete("/auth/session", authHandler.Logout)
 			r.Route("/agents", agentHandler.Register)
 		})

@@ -50,18 +50,18 @@ func (h *AuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, dto.ExchangeResponse{
 		Token:     result.Token,
 		ExpiresAt: result.ExpiresAt,
-		Owner:     dto.NewOwnerResponse(result.Owner),
+		User:      dto.NewUserResponse(result.User),
 	})
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	identity, ok := authctx.OwnerFrom(r.Context())
+	identity, ok := authctx.UserFrom(r.Context())
 	if !ok {
 		WriteError(w, h.log, apperr.Unauthorized("authentication required"))
 		return
 	}
 
-	if err := h.svc.RevokeOwnerToken(r.Context(), identity.TokenHash); err != nil {
+	if err := h.svc.RevokeUserToken(r.Context(), identity.TokenHash); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}
@@ -78,7 +78,7 @@ func (h *AuthHandler) Whoami(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusOK, dto.WhoamiResponse{
 		Agent: dto.NewAgentResponse(identity.Agent),
-		Owner: dto.NewOwnerResponse(identity.Owner),
+		User:  dto.NewUserResponse(identity.User),
 	})
 }
 

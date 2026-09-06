@@ -119,7 +119,7 @@ func newService(repo *fakeRepo) *usecase.EventService {
 	return usecase.NewEventService(repo, &fakeLimiter{allow: true}, noopLogger{})
 }
 
-var actor = usecase.Actor{OwnerID: "owner-1", AgentID: "agent-1"}
+var actor = usecase.Actor{UserID: "user-1", AgentID: "agent-1"}
 
 func TestCreateAssignsIdentityAndTimestamps(t *testing.T) {
 	t.Parallel()
@@ -136,8 +136,8 @@ func TestCreateAssignsIdentityAndTimestamps(t *testing.T) {
 		t.Error("Create() did not assign an ID")
 	}
 
-	if event.OwnerID != actor.OwnerID {
-		t.Errorf("Create() owner_id = %q, want %q", event.OwnerID, actor.OwnerID)
+	if event.UserID != actor.UserID {
+		t.Errorf("Create() user_id = %q, want %q", event.UserID, actor.UserID)
 	}
 
 	if event.CreatedAt.IsZero() || event.UpdatedAt.IsZero() {
@@ -328,7 +328,7 @@ func TestUpdateRejectsBlankName(t *testing.T) {
 	}
 }
 
-func TestUpdateByNonOwnerIsForbidden(t *testing.T) {
+func TestUpdateByNonUserIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	svc := newService(newFakeRepo())
@@ -338,7 +338,7 @@ func TestUpdateByNonOwnerIsForbidden(t *testing.T) {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	intruder := usecase.Actor{OwnerID: "owner-2", AgentID: "agent-2"}
+	intruder := usecase.Actor{UserID: "user-2", AgentID: "agent-2"}
 	_, err = svc.Update(context.Background(), intruder, created.ID, usecase.UpdateEventInput{Name: "hijacked"})
 	if apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("Update() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
@@ -365,7 +365,7 @@ func TestDeleteRemovesEvent(t *testing.T) {
 	}
 }
 
-func TestDeleteByNonOwnerIsForbidden(t *testing.T) {
+func TestDeleteByNonUserIsForbidden(t *testing.T) {
 	t.Parallel()
 
 	svc := newService(newFakeRepo())
@@ -375,7 +375,7 @@ func TestDeleteByNonOwnerIsForbidden(t *testing.T) {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	intruder := usecase.Actor{OwnerID: "owner-2", AgentID: "agent-2"}
+	intruder := usecase.Actor{UserID: "user-2", AgentID: "agent-2"}
 	if err := svc.Delete(context.Background(), intruder, created.ID); apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("Delete() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
