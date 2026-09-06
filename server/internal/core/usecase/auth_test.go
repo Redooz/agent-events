@@ -10,6 +10,7 @@ import (
 	"agent-events/server/internal/core/domain"
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/pkg/apperr"
 )
 
@@ -284,7 +285,7 @@ func newAuthService(
 		limiter = &fakeAuthLimiter{allow: true}
 	}
 
-	return usecase.NewAuthService(verifier, users, tokens, agents, limiter, noopLogger{}, usecase.AuthConfig{
+	return usecase.NewAuthService(verifier, users, tokens, agents, limiter, noopLogger{}, types.AuthConfig{
 		UserTokenTTL:     24 * time.Hour,
 		MaxAgentsPerUser: 2,
 	})
@@ -296,7 +297,7 @@ func TestExchangeIssuesTokenAndUpsertsUser(t *testing.T) {
 	users := newFakeUserStore()
 	svc := newAuthService(users, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "google-sub-1",
 		ClientIP: "192.0.2.1",
@@ -321,7 +322,7 @@ func TestExchangeIssuesTokenAndUpsertsUser(t *testing.T) {
 		t.Errorf("Exchange() created %d users, want 1", len(users.users))
 	}
 
-	again, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	again, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "google-sub-1",
 		ClientIP: "192.0.2.1",
@@ -344,7 +345,7 @@ func TestExchangeRejectsUnknownProvider(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	_, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	_, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: "discord",
 		IDToken:  "tok",
 		ClientIP: "192.0.2.1",
@@ -359,7 +360,7 @@ func TestExchangeRejectsBadTokenAsUnauthorized(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, &fakeVerifier{err: errors.New("bad signature")}, nil)
 
-	_, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	_, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "forged",
 		ClientIP: "192.0.2.1",
@@ -374,7 +375,7 @@ func TestExchangeReportsRateLimit(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, &fakeAuthLimiter{allow: false})
 
-	_, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	_, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "tok",
 		ClientIP: "192.0.2.1",
@@ -389,7 +390,7 @@ func TestExchangeReportsProviderUnavailable(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, &fakeVerifier{err: port.ErrProviderUnavailable}, nil)
 
-	_, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	_, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderApple,
 		IDToken:  "tok",
 		ClientIP: "192.0.2.1",
@@ -404,7 +405,7 @@ func TestAuthenticateUserRoundTripsExchange(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -436,7 +437,7 @@ func TestAuthenticateUserRejectsUnknownAndExpiredTokens(t *testing.T) {
 	tokens := newFakeTokenStore()
 	svc = newAuthService(users, tokens, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -460,7 +461,7 @@ func TestAgentKeyLifecycle(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -518,7 +519,7 @@ func TestCreateAgentEnforcesLimit(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -544,7 +545,7 @@ func TestCreateAgentFreesSlotAfterRevoke(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -581,7 +582,7 @@ func TestAuthenticateAgentThrottlesTouch(t *testing.T) {
 	agents := newFakeAgentStore()
 	svc := newAuthService(nil, nil, agents, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -613,7 +614,7 @@ func TestCreateAgentRejectsBlankName(t *testing.T) {
 
 	svc := newAuthService(nil, nil, nil, nil, nil)
 
-	result, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	result, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-1",
 		ClientIP: "192.0.2.1",
@@ -634,7 +635,7 @@ func TestRevokeAgentDeniesForeignUser(t *testing.T) {
 	users := newFakeUserStore()
 	svc := newAuthService(users, nil, nil, nil, nil)
 
-	userA, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	userA, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-a",
 		ClientIP: "192.0.2.1",
@@ -643,7 +644,7 @@ func TestRevokeAgentDeniesForeignUser(t *testing.T) {
 		t.Fatalf("Exchange() error = %v, want nil", err)
 	}
 
-	userB, err := svc.Exchange(context.Background(), usecase.ExchangeInput{
+	userB, err := svc.Exchange(context.Background(), types.ExchangeInput{
 		Provider: domain.ProviderGoogle,
 		IDToken:  "sub-b",
 		ClientIP: "192.0.2.1",

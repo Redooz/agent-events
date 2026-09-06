@@ -59,6 +59,9 @@ instance only, swap for Redis when running multiple replicas.
 ## Conventions
 
 - No code comments — not even doc comments on exported symbols — unless explicitly requested.
+- Usecase files must stay clean: a service file contains only its service (constructor, methods,
+  constants). Every type related to it (configs, inputs, results, credentials like `Actor`) lives
+  in `internal/core/usecase/types/` (package `types`), one `<service>_types.go` file per service.
 - Errors: return `apperr.NotFound` / `apperr.Invalid` / `apperr.Unauthorized` / `apperr.Forbidden` /
   `apperr.TooMany` / `apperr.Wrap` from use cases; handlers and middleware pass them to `WriteError`,
   which maps kind → HTTP status (`pkg/apperr/apperr.go`, `handler/response.go`).

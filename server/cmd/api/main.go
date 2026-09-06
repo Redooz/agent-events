@@ -19,6 +19,7 @@ import (
 	"agent-events/server/internal/adapters/postgres"
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/internal/transport/http/controller"
 	"agent-events/server/internal/transport/http/handler"
 	"agent-events/server/internal/transport/http/middleware"
@@ -92,8 +93,8 @@ func provideRateLimiter(cfg config.Config) *memory.RateLimiter {
 	})
 }
 
-func provideAuthConfig(cfg config.Config) usecase.AuthConfig {
-	return usecase.AuthConfig{
+func provideAuthConfig(cfg config.Config) types.AuthConfig {
+	return types.AuthConfig{
 		UserTokenTTL:     cfg.UserTokenTTL,
 		MaxAgentsPerUser: cfg.MaxAgentsPerUser,
 	}

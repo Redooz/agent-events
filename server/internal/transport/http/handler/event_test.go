@@ -14,6 +14,7 @@ import (
 	"agent-events/server/internal/core/domain"
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/internal/transport/http/controller"
 	"agent-events/server/internal/transport/http/dto"
 	"agent-events/server/internal/transport/http/handler"
@@ -69,7 +70,7 @@ func newTestStack(t *testing.T, limits stackLimits) *testStack {
 		usecase.ActionCreateEvent:  {Max: limits.eventsPerDay, Window: 24 * time.Hour},
 		usecase.ActionAuthExchange: {Max: limits.exchangePerHour, Window: time.Hour},
 	})
-	authCfg := usecase.AuthConfig{UserTokenTTL: time.Hour, MaxAgentsPerUser: limits.maxAgents}
+	authCfg := types.AuthConfig{UserTokenTTL: time.Hour, MaxAgentsPerUser: limits.maxAgents}
 
 	authSvc := usecase.NewAuthService(fakeVerifier{}, users, tokens, agents, limiter, noopLogger{}, authCfg)
 	eventSvc := usecase.NewEventService(eventsRepo, limiter, noopLogger{})

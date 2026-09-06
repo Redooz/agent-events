@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"agent-events/server/internal/core/domain"
-	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 )
 
 type CreateEventRequest struct {
@@ -47,15 +47,15 @@ func NewEventResponses(events []domain.Event) []EventResponse {
 	return out
 }
 
-func (r CreateEventRequest) ToInput() usecase.CreateEventInput {
-	return usecase.CreateEventInput{
+func (r CreateEventRequest) ToInput() types.CreateEventInput {
+	return types.CreateEventInput{
 		Name:        strings.TrimSpace(r.Name),
 		Description: strings.TrimSpace(r.Description),
 	}
 }
 
-func (r UpdateEventRequest) ToInput() usecase.UpdateEventInput {
-	return usecase.UpdateEventInput{
+func (r UpdateEventRequest) ToInput() types.UpdateEventInput {
+	return types.UpdateEventInput{
 		Name:        strings.TrimSpace(r.Name),
 		Description: strings.TrimSpace(r.Description),
 	}

@@ -9,22 +9,11 @@ import (
 
 	"agent-events/server/internal/core/domain"
 	"agent-events/server/internal/core/port"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/pkg/apperr"
 )
 
 const ActionCreateEvent = "event.create"
-
-// TODO: Move this to a file
-type CreateEventInput struct {
-	Name        string
-	Description string
-}
-
-// TODO: Move this to a file
-type UpdateEventInput struct {
-	Name        string
-	Description string
-}
 
 type EventService struct {
 	repo    port.EventRepository
@@ -36,7 +25,7 @@ func NewEventService(repo port.EventRepository, limiter port.RateLimiter, logger
 	return &EventService{repo: repo, limiter: limiter, logger: logger}
 }
 
-func (s *EventService) Create(ctx context.Context, actor Actor, in CreateEventInput) (domain.Event, error) {
+func (s *EventService) Create(ctx context.Context, actor types.Actor, in types.CreateEventInput) (domain.Event, error) {
 	if actor.UserID == "" {
 		return domain.Event{}, apperr.Invalid("user is required")
 	}
@@ -108,7 +97,7 @@ func (s *EventService) List(ctx context.Context) ([]domain.Event, error) {
 	return events, nil
 }
 
-func (s *EventService) Update(ctx context.Context, actor Actor, id string, in UpdateEventInput) (domain.Event, error) {
+func (s *EventService) Update(ctx context.Context, actor types.Actor, id string, in types.UpdateEventInput) (domain.Event, error) {
 	event, err := s.repo.Get(ctx, id)
 	switch {
 	case errors.Is(err, domain.ErrEventNotFound):
@@ -148,7 +137,7 @@ func (s *EventService) Update(ctx context.Context, actor Actor, id string, in Up
 	return updated, nil
 }
 
-func (s *EventService) Delete(ctx context.Context, actor Actor, id string) error {
+func (s *EventService) Delete(ctx context.Context, actor types.Actor, id string) error {
 	event, err := s.repo.Get(ctx, id)
 	switch {
 	case errors.Is(err, domain.ErrEventNotFound):

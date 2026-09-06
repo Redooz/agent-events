@@ -12,6 +12,7 @@ import (
 
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/internal/transport/http/authctx"
 	"agent-events/server/internal/transport/http/dto"
 	"agent-events/server/pkg/apperr"
@@ -56,7 +57,7 @@ func (h *EventHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Create(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, req.ToInput())
+	event, err := h.svc.Create(r.Context(), types.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -114,7 +115,7 @@ func (h *EventHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event, err := h.svc.Update(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
+	event, err := h.svc.Update(r.Context(), types.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id, req.ToInput())
 	if err != nil {
 		WriteError(w, h.log, err)
 		return
@@ -136,7 +137,7 @@ func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), usecase.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id); err != nil {
+	if err := h.svc.Delete(r.Context(), types.Actor{UserID: actor.User.ID, AgentID: actor.Agent.ID}, id); err != nil {
 		WriteError(w, h.log, err)
 		return
 	}

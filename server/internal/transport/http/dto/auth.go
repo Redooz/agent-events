@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"agent-events/server/internal/core/domain"
-	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 )
 
 type ExchangeRequest struct {
@@ -35,8 +35,8 @@ func NewUserResponse(user domain.User) UserResponse {
 	}
 }
 
-func (r ExchangeRequest) ToInput(clientIP string) usecase.ExchangeInput {
-	return usecase.ExchangeInput{
+func (r ExchangeRequest) ToInput(clientIP string) types.ExchangeInput {
+	return types.ExchangeInput{
 		Provider: strings.TrimSpace(r.Provider),
 		IDToken:  strings.TrimSpace(r.IDToken),
 		ClientIP: clientIP,

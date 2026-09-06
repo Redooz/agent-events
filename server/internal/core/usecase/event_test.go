@@ -8,6 +8,7 @@ import (
 	"agent-events/server/internal/core/domain"
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
+	"agent-events/server/internal/core/usecase/types"
 	"agent-events/server/pkg/apperr"
 )
 
@@ -119,7 +120,7 @@ func newService(repo *fakeRepo) *usecase.EventService {
 	return usecase.NewEventService(repo, &fakeLimiter{allow: true}, noopLogger{})
 }
 
-var actor = usecase.Actor{UserID: "user-1", AgentID: "agent-1"}
+var actor = types.Actor{UserID: "user-1", AgentID: "agent-1"}
 
 func TestCreateAssignsIdentityAndTimestamps(t *testing.T) {
 	t.Parallel()
@@ -127,7 +128,7 @@ func TestCreateAssignsIdentityAndTimestamps(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newService(repo)
 
-	event, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy", Description: "shipped v2"})
+	event, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy", Description: "shipped v2"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
@@ -154,7 +155,7 @@ func TestCreateRejectsMissingActor(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	_, err := svc.Create(context.Background(), usecase.Actor{}, usecase.CreateEventInput{Name: "deploy"})
+	_, err := svc.Create(context.Background(), types.Actor{}, types.CreateEventInput{Name: "deploy"})
 	if apperr.KindOf(err) != apperr.KindInvalid {
 		t.Fatalf("Create() kind = %v, want %v", apperr.KindOf(err), apperr.KindInvalid)
 	}
@@ -165,7 +166,7 @@ func TestCreateRateLimited(t *testing.T) {
 
 	svc := usecase.NewEventService(newFakeRepo(), &fakeLimiter{allow: false}, noopLogger{})
 
-	_, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	_, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if apperr.KindOf(err) != apperr.KindTooMany {
 		t.Fatalf("Create() kind = %v, want %v", apperr.KindOf(err), apperr.KindTooMany)
 	}
@@ -176,7 +177,7 @@ func TestCreateReportsRateLimiterFailureAsInternal(t *testing.T) {
 
 	svc := usecase.NewEventService(newFakeRepo(), &fakeLimiter{err: errStoreDown}, noopLogger{})
 
-	_, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	_, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if apperr.KindOf(err) != apperr.KindInternal {
 		t.Fatalf("Create() kind = %v, want %v", apperr.KindOf(err), apperr.KindInternal)
 	}
@@ -187,7 +188,7 @@ func TestCreateRejectsBlankName(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	_, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "   "})
+	_, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "   "})
 	if apperr.KindOf(err) != apperr.KindInvalid {
 		t.Fatalf("Create() kind = %v, want %v", apperr.KindOf(err), apperr.KindInvalid)
 	}
@@ -200,7 +201,7 @@ func TestCreateReportsStoreFailureAsInternal(t *testing.T) {
 	repo.failErr = errStoreDown
 	svc := newService(repo)
 
-	_, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	_, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if apperr.KindOf(err) != apperr.KindInternal {
 		t.Fatalf("Create() kind = %v, want %v", apperr.KindOf(err), apperr.KindInternal)
 	}
@@ -227,7 +228,7 @@ func TestGetRoundTripsStoredEvent(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newService(repo)
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
@@ -248,7 +249,7 @@ func TestListReturnsStoredEvents(t *testing.T) {
 	svc := newService(newFakeRepo())
 
 	for _, name := range []string{"one", "two"} {
-		if _, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: name}); err != nil {
+		if _, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: name}); err != nil {
 			t.Fatalf("Create(%q) error = %v, want nil", name, err)
 		}
 	}
@@ -280,12 +281,12 @@ func TestUpdateReplacesMutableFields(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	updated, err := svc.Update(context.Background(), actor, created.ID, usecase.UpdateEventInput{
+	updated, err := svc.Update(context.Background(), actor, created.ID, types.UpdateEventInput{
 		Name:        "rollback",
 		Description: "reverted v2",
 	})
@@ -307,7 +308,7 @@ func TestUpdateMissingEventIsNotFound(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	if _, err := svc.Update(context.Background(), actor, "missing", usecase.UpdateEventInput{Name: "x"}); apperr.KindOf(err) != apperr.KindNotFound {
+	if _, err := svc.Update(context.Background(), actor, "missing", types.UpdateEventInput{Name: "x"}); apperr.KindOf(err) != apperr.KindNotFound {
 		t.Fatalf("Update() kind = %v, want %v", apperr.KindOf(err), apperr.KindNotFound)
 	}
 }
@@ -317,12 +318,12 @@ func TestUpdateRejectsBlankName(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	_, err = svc.Update(context.Background(), actor, created.ID, usecase.UpdateEventInput{Name: ""})
+	_, err = svc.Update(context.Background(), actor, created.ID, types.UpdateEventInput{Name: ""})
 	if apperr.KindOf(err) != apperr.KindInvalid {
 		t.Fatalf("Update() kind = %v, want %v", apperr.KindOf(err), apperr.KindInvalid)
 	}
@@ -333,13 +334,13 @@ func TestUpdateByNonUserIsForbidden(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	intruder := usecase.Actor{UserID: "user-2", AgentID: "agent-2"}
-	_, err = svc.Update(context.Background(), intruder, created.ID, usecase.UpdateEventInput{Name: "hijacked"})
+	intruder := types.Actor{UserID: "user-2", AgentID: "agent-2"}
+	_, err = svc.Update(context.Background(), intruder, created.ID, types.UpdateEventInput{Name: "hijacked"})
 	if apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("Update() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
@@ -351,7 +352,7 @@ func TestDeleteRemovesEvent(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newService(repo)
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
@@ -370,12 +371,12 @@ func TestDeleteByNonUserIsForbidden(t *testing.T) {
 
 	svc := newService(newFakeRepo())
 
-	created, err := svc.Create(context.Background(), actor, usecase.CreateEventInput{Name: "deploy"})
+	created, err := svc.Create(context.Background(), actor, types.CreateEventInput{Name: "deploy"})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 
-	intruder := usecase.Actor{UserID: "user-2", AgentID: "agent-2"}
+	intruder := types.Actor{UserID: "user-2", AgentID: "agent-2"}
 	if err := svc.Delete(context.Background(), intruder, created.ID); apperr.KindOf(err) != apperr.KindForbidden {
 		t.Fatalf("Delete() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
 	}
