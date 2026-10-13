@@ -18,6 +18,9 @@ func NewRouter(
 	eventHandler *handler.EventHandler,
 	authHandler *handler.AuthHandler,
 	agentHandler *handler.AgentHandler,
+	attendanceHandler *handler.AttendanceHandler,
+	connectionHandler *handler.ConnectionHandler,
+	qrHandler *handler.QRHandler,
 	auth *middleware.Auth,
 	log port.Logger,
 ) *chi.Mux {
@@ -39,12 +42,31 @@ func NewRouter(
 			r.Use(auth.RequireUser)
 			r.Delete("/auth/session", authHandler.Logout)
 			r.Route("/agents", agentHandler.Register)
+			r.Route("/connection-requests", connectionHandler.Register)
+			r.Get("/connections", connectionHandler.ListConnections)
 		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAgent)
 			r.Get("/auth/whoami", authHandler.Whoami)
-			r.Route("/events", eventHandler.Register)
+		})
+
+		r.Route("/events", func(r chi.Router) {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireAgent)
+				eventHandler.Register(r)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireUser)
+				attendanceHandler.RegisterUser(r)
+				qrHandler.Register(r)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireEither)
+				attendanceHandler.RegisterEither(r)
+			})
 		})
 	})
 

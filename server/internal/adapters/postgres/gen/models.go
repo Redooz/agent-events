@@ -18,6 +18,32 @@ type Agent struct {
 	LastUsedAt pgtype.Timestamptz
 }
 
+type Connection struct {
+	ID        string
+	EventID   string
+	UserAID   string
+	UserBID   string
+	Method    string
+	CreatedAt pgtype.Timestamptz
+}
+
+type ConnectionRequest struct {
+	ID          string
+	EventID     string
+	FromUserID  string
+	ToUserID    string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+	RespondedAt pgtype.Timestamptz
+}
+
+type ConnectionScan struct {
+	EventID   string
+	ScannerID string
+	ScannedID string
+	CreatedAt pgtype.Timestamptz
+}
+
 type Event struct {
 	ID          string
 	UserID      string
@@ -25,6 +51,23 @@ type Event struct {
 	Description string
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+	Mode        string
+	Date        pgtype.Timestamptz
+}
+
+type EventAttendee struct {
+	EventID   string
+	UserID    string
+	CreatedAt pgtype.Timestamptz
+}
+
+type EventQrToken struct {
+	TokenHash string
+	EventID   string
+	UserID    string
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
 }
 
 type User struct {

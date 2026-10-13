@@ -25,9 +25,13 @@ type Config struct {
 
 	UserTokenTTL     time.Duration
 	MaxAgentsPerUser int
+	QRTokenTTL       time.Duration
 
-	RateLimitEventsPerDay    int
-	RateLimitExchangePerHour int
+	RateLimitEventsPerDay      int
+	RateLimitExchangePerHour   int
+	RateLimitQRPerMinute       int
+	RateLimitQRScanPerMinute   int
+	RateLimitConnectionsPerDay int
 
 	TrustedProxies []*net.IPNet
 }
@@ -43,8 +47,12 @@ func Load() (Config, error) {
 	v.SetDefault("microsoft_tenant", "common")
 	v.SetDefault("user_token_ttl_hours", 720)
 	v.SetDefault("max_agents_per_user", 10)
+	v.SetDefault("qr_token_ttl_seconds", 45)
 	v.SetDefault("rate_limit_events_per_day", 20)
 	v.SetDefault("rate_limit_exchange_per_hour", 30)
+	v.SetDefault("rate_limit_qr_per_minute", 10)
+	v.SetDefault("rate_limit_qr_scan_per_minute", 60)
+	v.SetDefault("rate_limit_connections_per_day", 50)
 
 	trustedProxies, err := parseTrustedProxies(v.GetString("trusted_proxies"))
 	if err != nil {
@@ -62,9 +70,13 @@ func Load() (Config, error) {
 		MicrosoftTenant:   v.GetString("microsoft_tenant"),
 		UserTokenTTL:      time.Duration(v.GetInt("user_token_ttl_hours")) * time.Hour,
 		MaxAgentsPerUser:  v.GetInt("max_agents_per_user"),
+		QRTokenTTL:        time.Duration(v.GetInt("qr_token_ttl_seconds")) * time.Second,
 
-		RateLimitEventsPerDay:    v.GetInt("rate_limit_events_per_day"),
-		RateLimitExchangePerHour: v.GetInt("rate_limit_exchange_per_hour"),
+		RateLimitEventsPerDay:      v.GetInt("rate_limit_events_per_day"),
+		RateLimitExchangePerHour:   v.GetInt("rate_limit_exchange_per_hour"),
+		RateLimitQRPerMinute:       v.GetInt("rate_limit_qr_per_minute"),
+		RateLimitQRScanPerMinute:   v.GetInt("rate_limit_qr_scan_per_minute"),
+		RateLimitConnectionsPerDay: v.GetInt("rate_limit_connections_per_day"),
 
 		TrustedProxies: trustedProxies,
 	}
@@ -106,6 +118,22 @@ func (c Config) Validate() error {
 
 	if c.RateLimitExchangePerHour < 1 {
 		return fmt.Errorf("RATE_LIMIT_EXCHANGE_PER_HOUR must be at least 1, got %d", c.RateLimitExchangePerHour)
+	}
+
+	if c.QRTokenTTL <= 0 {
+		return fmt.Errorf("QR_TOKEN_TTL_SECONDS must be positive, got %d", int(c.QRTokenTTL.Seconds()))
+	}
+
+	if c.RateLimitQRPerMinute < 1 {
+		return fmt.Errorf("RATE_LIMIT_QR_PER_MINUTE must be at least 1, got %d", c.RateLimitQRPerMinute)
+	}
+
+	if c.RateLimitQRScanPerMinute < 1 {
+		return fmt.Errorf("RATE_LIMIT_QR_SCAN_PER_MINUTE must be at least 1, got %d", c.RateLimitQRScanPerMinute)
+	}
+
+	if c.RateLimitConnectionsPerDay < 1 {
+		return fmt.Errorf("RATE_LIMIT_CONNECTIONS_PER_DAY must be at least 1, got %d", c.RateLimitConnectionsPerDay)
 	}
 
 	return nil

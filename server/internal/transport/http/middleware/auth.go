@@ -59,6 +59,40 @@ func (a *Auth) RequireUser(next http.Handler) http.Handler {
 	})
 }
 
+func (a *Auth) RequireEither(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, ok := bearerToken(r)
+		if !ok {
+			handler.WriteError(w, a.log, apperr.Unauthorized("missing bearer token"))
+			return
+		}
+
+		switch {
+		case strings.HasPrefix(raw, "aea_"):
+			creds, err := a.auth.AuthenticateAgent(r.Context(), raw)
+			if err != nil {
+				handler.WriteError(w, a.log, err)
+				return
+			}
+
+			ctx := authctx.WithAgent(r.Context(), authctx.AgentIdentity{Agent: creds.Agent, User: creds.User})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		case strings.HasPrefix(raw, "aeu_"):
+			user, err := a.auth.AuthenticateUser(r.Context(), raw)
+			if err != nil {
+				handler.WriteError(w, a.log, err)
+				return
+			}
+
+			identity := authctx.UserIdentity{User: user, TokenHash: usecase.HashToken(raw)}
+			ctx := authctx.WithUser(r.Context(), identity)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		default:
+			handler.WriteError(w, a.log, apperr.Unauthorized("unknown credential type"))
+		}
+	})
+}
+
 func bearerToken(r *http.Request) (string, bool) {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	if header == "" {

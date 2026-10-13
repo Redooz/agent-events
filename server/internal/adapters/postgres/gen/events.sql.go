@@ -24,19 +24,32 @@ func (q *Queries) DeleteEvent(ctx context.Context, id string) (int64, error) {
 }
 
 const getEventByID = `-- name: GetEventByID :one
-SELECT id, user_id, name, description, created_at, updated_at
+SELECT id, user_id, name, description, mode, date, created_at, updated_at
 FROM events
 WHERE id = $1
 `
 
-func (q *Queries) GetEventByID(ctx context.Context, id string) (Event, error) {
+type GetEventByIDRow struct {
+	ID          string
+	UserID      string
+	Name        string
+	Description string
+	Mode        string
+	Date        pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) GetEventByID(ctx context.Context, id string) (GetEventByIDRow, error) {
 	row := q.db.QueryRow(ctx, getEventByID, id)
-	var i Event
+	var i GetEventByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
 		&i.Name,
 		&i.Description,
+		&i.Mode,
+		&i.Date,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -44,8 +57,8 @@ func (q *Queries) GetEventByID(ctx context.Context, id string) (Event, error) {
 }
 
 const insertEvent = `-- name: InsertEvent :exec
-INSERT INTO events (id, user_id, name, description, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO events (id, user_id, name, description, mode, date, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertEventParams struct {
@@ -53,6 +66,8 @@ type InsertEventParams struct {
 	UserID      string
 	Name        string
 	Description string
+	Mode        string
+	Date        pgtype.Timestamptz
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 }
@@ -63,6 +78,8 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 		arg.UserID,
 		arg.Name,
 		arg.Description,
+		arg.Mode,
+		arg.Date,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -70,25 +87,38 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT id, user_id, name, description, created_at, updated_at
+SELECT id, user_id, name, description, mode, date, created_at, updated_at
 FROM events
 ORDER BY created_at
 `
 
-func (q *Queries) ListEvents(ctx context.Context) ([]Event, error) {
+type ListEventsRow struct {
+	ID          string
+	UserID      string
+	Name        string
+	Description string
+	Mode        string
+	Date        pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) ListEvents(ctx context.Context) ([]ListEventsRow, error) {
 	rows, err := q.db.Query(ctx, listEvents)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Event
+	var items []ListEventsRow
 	for rows.Next() {
-		var i Event
+		var i ListEventsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
 			&i.Name,
 			&i.Description,
+			&i.Mode,
+			&i.Date,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -104,7 +134,7 @@ func (q *Queries) ListEvents(ctx context.Context) ([]Event, error) {
 
 const updateEvent = `-- name: UpdateEvent :execrows
 UPDATE events
-SET name = $2, description = $3, updated_at = $4
+SET name = $2, description = $3, mode = $4, updated_at = $5
 WHERE id = $1
 `
 
@@ -112,6 +142,7 @@ type UpdateEventParams struct {
 	ID          string
 	Name        string
 	Description string
+	Mode        string
 	UpdatedAt   pgtype.Timestamptz
 }
 
@@ -120,6 +151,7 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (int64
 		arg.ID,
 		arg.Name,
 		arg.Description,
+		arg.Mode,
 		arg.UpdatedAt,
 	)
 	if err != nil {

@@ -80,6 +80,15 @@ func asNotFound(err error, sentinel error) error {
 	return err
 }
 
+func asUniqueViolation(err error, sentinel error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return sentinel
+	}
+
+	return err
+}
+
 func timestamptz(t time.Time) pgtype.Timestamptz {
 	if t.IsZero() {
 		return pgtype.Timestamptz{}

@@ -44,6 +44,34 @@ proxy, set `TRUSTED_PROXIES` to the proxy IP ranges so client IPs are taken from
 Events are globally listable and readable by every agent — that is intended
 product behavior for now; public/private event visibility comes later.
 
+See [Auth diagrams](docs/auth-diagrams.md) for a plain-language and a technical
+walkthrough of the flow.
+
+## Events & connections
+
+Events carry a `mode` (`online` or `onsite`) and a `date`, both required at
+creation; the mode stays editable by the owner until the event date passes.
+Users attend events themselves (`POST /api/v1/even "delivery": {
+   "mode": "none"
+ },ts/{id}/attend` with a user
+token) or via an agent acting for their user (agent key).
+
+A connection is a real link between two users — one connection per user pair,
+recorded with the event where it formed and how:
+
+- **Online events** — mutual consent: an attendee sends a connection request
+  (`POST /api/v1/connection-requests`; other attendees are discoverable via
+  `GET /api/v1/events/{id}/attendees`, attendee-only); the target accepts or
+  declines. A request that matches a pending request in the opposite direction
+  auto-accepts.
+- **Onsite events** — mutual QR scans: each attendee fetches a short-lived,
+  rotating payload (`POST /api/v1/events/{id}/qr`, user token, attendee-only;
+  default TTL 45s, stored hash-only) and renders it as a QR code. Each scan is
+  recorded per direction (`POST /api/v1/events/{id}/qr/scan`); the connection
+  forms only once both users have scanned each other. Codes are single-use and
+  available only on the event day, so screenshots go stale and physical
+  proximity is required.
+
 ## Getting started
 
 Requires [mise](https://mise.jdx.dev) (pins `go`, `golangci-lint`, and `sqlc`) and Go 1.27+.
@@ -73,11 +101,20 @@ make run                          # starts API on :8080 (dev identities)
 - `POST /api/v1/agents` — create agent (user token)
 - `GET /api/v1/agents` — list agents (user token)
 - `DELETE /api/v1/agents/{id}` — revoke agent (user token)
-- `POST /api/v1/events` — create event (agent key)
+- `POST /api/v1/events` — create event (agent key; `mode` and `date` required)
 - `GET /api/v1/events` — list events (agent key)
 - `GET /api/v1/events/{id}` — get event (agent key)
-- `PUT /api/v1/events/{id}` — update event (agent key, user only)
+- `PUT /api/v1/events/{id}` — update event (agent key, user only; mode locked after the event date)
 - `DELETE /api/v1/events/{id}` — delete event (agent key, user only)
+- `POST /api/v1/events/{id}/attend` — attend event (user token or agent key)
+- `GET /api/v1/events/{id}/attendees` — attendee roster (user token, attendee-only)
+- `POST /api/v1/events/{id}/qr` — generate rotating QR payload (user token, attendee-only, onsite events)
+- `POST /api/v1/events/{id}/qr/scan` — scan a QR payload (user token, attendee-only, onsite events)
+- `POST /api/v1/connection-requests` — request a connection (user token, online events)
+- `GET /api/v1/connection-requests` — incoming pending requests (user token)
+- `POST /api/v1/connection-requests/{id}/accept` — accept (user token, recipient only)
+- `POST /api/v1/connection-requests/{id}/decline` — decline (user token, recipient only)
+- `GET /api/v1/connections` — list my connections (user token)
 
 ## License
 

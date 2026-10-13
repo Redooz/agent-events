@@ -14,18 +14,6 @@ import (
 
 const ActionCreateEvent = "event.create"
 
-// TODO: Move this to a file
-type CreateEventInput struct {
-	Name        string
-	Description string
-}
-
-// TODO: Move this to a file
-type UpdateEventInput struct {
-	Name        string
-	Description string
-}
-
 type EventService struct {
 	repo    port.EventRepository
 	limiter port.RateLimiter
@@ -58,6 +46,8 @@ func (s *EventService) Create(ctx context.Context, actor Actor, in CreateEventIn
 		UserID:      actor.UserID,
 		Name:        in.Name,
 		Description: in.Description,
+		Mode:        in.Mode,
+		Date:        in.Date.UTC(),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -128,8 +118,14 @@ func (s *EventService) Update(ctx context.Context, actor Actor, id string, in Up
 		return domain.Event{}, apperr.Forbidden("event does not belong to you")
 	}
 
+	if !event.ModeEditable(time.Now().UTC()) && in.Mode != event.Mode {
+		s.logger.Warn("event mode change denied after event date", port.Str("event_id", id))
+		return domain.Event{}, apperr.Invalid("event mode can no longer be changed")
+	}
+
 	event.Name = in.Name
 	event.Description = in.Description
+	event.Mode = in.Mode
 	event.UpdatedAt = time.Now().UTC()
 
 	if err := event.Validate(); err != nil {

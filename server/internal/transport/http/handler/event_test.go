@@ -43,13 +43,16 @@ func (fakeVerifier) Verify(_ context.Context, provider, idToken string) (domain.
 }
 
 type stackLimits struct {
-	eventsPerDay    int
-	exchangePerHour int
-	maxAgents       int
+	eventsPerDay      int
+	exchangePerHour   int
+	maxAgents         int
+	qrPerMinute       int
+	qrScanPerMinute   int
+	connectionsPerDay int
 }
 
 func defaultLimits() stackLimits {
-	return stackLimits{eventsPerDay: 100, exchangePerHour: 100, maxAgents: 10}
+	return stackLimits{eventsPerDay: 100, exchangePerHour: 100, maxAgents: 10, qrPerMinute: 100, qrScanPerMinute: 100, connectionsPerDay: 100}
 }
 
 type testStack struct {
@@ -65,22 +68,36 @@ func newTestStack(t *testing.T, limits stackLimits) *testStack {
 	users := newFakeUserRepo()
 	tokens := newFakeUserTokenRepo()
 	agents := newFakeAgentRepo()
+	attendees := newFakeAttendeeRepo()
+	connections := newFakeConnectionRepo()
+	requests := newFakeRequestRepo()
+	qrTokens := newFakeQRTokenRepo()
+	scans := newFakeScanRepo()
 	limiter := memory.NewRateLimiter(map[string]memory.Limit{
-		usecase.ActionCreateEvent:  {Max: limits.eventsPerDay, Window: 24 * time.Hour},
-		usecase.ActionAuthExchange: {Max: limits.exchangePerHour, Window: time.Hour},
+		usecase.ActionCreateEvent:       {Max: limits.eventsPerDay, Window: 24 * time.Hour},
+		usecase.ActionAuthExchange:      {Max: limits.exchangePerHour, Window: time.Hour},
+		usecase.ActionRequestConnection: {Max: limits.connectionsPerDay, Window: 24 * time.Hour},
+		usecase.ActionGenerateQR:        {Max: limits.qrPerMinute, Window: time.Minute},
+		usecase.ActionConsumeQR:         {Max: limits.qrScanPerMinute, Window: time.Minute},
 	})
 	authCfg := usecase.AuthConfig{UserTokenTTL: time.Hour, MaxAgentsPerUser: limits.maxAgents}
 
 	authSvc := usecase.NewAuthService(fakeVerifier{}, users, tokens, agents, limiter, noopLogger{}, authCfg)
 	eventSvc := usecase.NewEventService(eventsRepo, limiter, noopLogger{})
+	attendanceSvc := usecase.NewAttendanceService(eventsRepo, attendees, noopLogger{})
+	connectionSvc := usecase.NewConnectionService(eventsRepo, attendees, requests, connections, limiter, noopLogger{})
+	qrSvc := usecase.NewQRService(eventsRepo, attendees, qrTokens, scans, connectionSvc, limiter, noopLogger{}, usecase.QRConfig{TokenTTL: time.Minute})
 
 	eventHandler := handler.NewEventHandler(eventSvc, noopLogger{})
 	authHandler := handler.NewAuthHandler(authSvc, noopLogger{}, nil)
 	agentHandler := handler.NewAgentHandler(authSvc, noopLogger{})
+	attendanceHandler := handler.NewAttendanceHandler(attendanceSvc, noopLogger{})
+	connectionHandler := handler.NewConnectionHandler(connectionSvc, noopLogger{})
+	qrHandler := handler.NewQRHandler(qrSvc, noopLogger{})
 	authMW := middleware.NewAuth(authSvc, noopLogger{})
 
 	return &testStack{
-		router: controller.NewRouter(eventHandler, authHandler, agentHandler, authMW, noopLogger{}),
+		router: controller.NewRouter(eventHandler, authHandler, agentHandler, attendanceHandler, connectionHandler, qrHandler, authMW, noopLogger{}),
 		auth:   authSvc,
 		events: eventSvc,
 	}
@@ -146,7 +163,20 @@ func (s *testStack) agentKeyFor(t *testing.T, subject string) string {
 func (s *testStack) createEvent(t *testing.T, agentKey, name string) dto.EventResponse {
 	t.Helper()
 
-	rec := s.do(t, http.MethodPost, "/api/v1/events", `{"name":"`+name+`"}`, agentKey)
+	body := `{"name":"` + name + `","mode":"online","date":"2030-01-01T00:00:00Z"}`
+	rec := s.do(t, http.MethodPost, "/api/v1/events", body, agentKey)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create event = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	return decodeEvent(t, rec)
+}
+
+func (s *testStack) createEventMode(t *testing.T, agentKey, name, mode, date string) dto.EventResponse {
+	t.Helper()
+
+	body := `{"name":"` + name + `","mode":"` + mode + `","date":"` + date + `"}`
+	rec := s.do(t, http.MethodPost, "/api/v1/events", body, agentKey)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create event = %d, want %d (%s)", rec.Code, http.StatusCreated, rec.Body.String())
 	}
@@ -312,13 +342,13 @@ func TestCreateEventRateLimitedPerUser(t *testing.T) {
 
 	stack.createEvent(t, key, "one")
 
-	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"two"}`, key)
+	rec := stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"two","mode":"online","date":"2030-01-01T00:00:00Z"}`, key)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusTooManyRequests, rec.Body.String())
 	}
 
 	otherKey := stack.agentKeyFor(t, "bob")
-	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"three"}`, otherKey)
+	rec = stack.do(t, http.MethodPost, "/api/v1/events", `{"name":"three","mode":"online","date":"2030-01-01T00:00:00Z"}`, otherKey)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("other user status = %d, want %d", rec.Code, http.StatusCreated)
 	}
@@ -348,7 +378,7 @@ func TestCrossUserEventAccessIsForbidden(t *testing.T) {
 
 	event := stack.createEvent(t, aliceKey, "deploy")
 
-	rec := stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"hijacked"}`, bobKey)
+	rec := stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"hijacked","mode":"online"}`, bobKey)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("update by foreign agent = %d, want %d", rec.Code, http.StatusForbidden)
 	}
@@ -358,7 +388,7 @@ func TestCrossUserEventAccessIsForbidden(t *testing.T) {
 		t.Fatalf("delete by foreign agent = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 
-	rec = stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"renamed"}`, aliceKey)
+	rec = stack.do(t, http.MethodPut, "/api/v1/events/"+event.ID, `{"name":"renamed","mode":"online"}`, aliceKey)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update by user = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -509,7 +539,7 @@ func TestMalformedIDsReturnNotFound(t *testing.T) {
 		t.Fatalf("get event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 
-	rec = stack.do(t, http.MethodPut, "/api/v1/events/not-a-uuid", `{"name":"x"}`, key)
+	rec = stack.do(t, http.MethodPut, "/api/v1/events/not-a-uuid", `{"name":"x","mode":"online"}`, key)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("update event with malformed id = %d, want %d", rec.Code, http.StatusNotFound)
 	}

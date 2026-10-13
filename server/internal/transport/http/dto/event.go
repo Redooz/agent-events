@@ -9,13 +9,16 @@ import (
 )
 
 type CreateEventRequest struct {
-	Name        string `json:"name" validate:"required,max=128"`
-	Description string `json:"description" validate:"max=1024"`
+	Name        string    `json:"name" validate:"required,max=128"`
+	Description string    `json:"description" validate:"max=1024"`
+	Mode        string    `json:"mode" validate:"required,oneof=online onsite"`
+	Date        time.Time `json:"date" validate:"required"`
 }
 
 type UpdateEventRequest struct {
 	Name        string `json:"name" validate:"required,max=128"`
 	Description string `json:"description" validate:"max=1024"`
+	Mode        string `json:"mode" validate:"required,oneof=online onsite"`
 }
 
 type EventResponse struct {
@@ -23,6 +26,8 @@ type EventResponse struct {
 	UserID      string    `json:"user_id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
+	Mode        string    `json:"mode"`
+	Date        time.Time `json:"date"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -33,6 +38,8 @@ func NewEventResponse(event domain.Event) EventResponse {
 		UserID:      event.UserID,
 		Name:        event.Name,
 		Description: event.Description,
+		Mode:        event.Mode,
+		Date:        event.Date,
 		CreatedAt:   event.CreatedAt,
 		UpdatedAt:   event.UpdatedAt,
 	}
@@ -51,6 +58,8 @@ func (r CreateEventRequest) ToInput() usecase.CreateEventInput {
 	return usecase.CreateEventInput{
 		Name:        strings.TrimSpace(r.Name),
 		Description: strings.TrimSpace(r.Description),
+		Mode:        strings.TrimSpace(r.Mode),
+		Date:        r.Date,
 	}
 }
 
@@ -58,5 +67,6 @@ func (r UpdateEventRequest) ToInput() usecase.UpdateEventInput {
 	return usecase.UpdateEventInput{
 		Name:        strings.TrimSpace(r.Name),
 		Description: strings.TrimSpace(r.Description),
+		Mode:        strings.TrimSpace(r.Mode),
 	}
 }

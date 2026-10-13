@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 
 	"agent-events/server/internal/core/port"
 	"agent-events/server/internal/core/usecase"
@@ -145,12 +144,7 @@ func (h *EventHandler) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func eventURLID(r *http.Request) (string, error) {
-	id := chi.URLParam(r, "id")
-	if _, err := uuid.Parse(id); err != nil {
-		return "", apperr.NotFound("event not found")
-	}
-
-	return id, nil
+	return urlParamID(r, "event not found")
 }
 
 func validationError(err error) error {

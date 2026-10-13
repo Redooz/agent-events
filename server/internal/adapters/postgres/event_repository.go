@@ -23,6 +23,8 @@ func (r *EventRepository) Save(ctx context.Context, event domain.Event) (domain.
 		UserID:      event.UserID,
 		Name:        event.Name,
 		Description: event.Description,
+		Mode:        event.Mode,
+		Date:        timestamptz(event.Date),
 		CreatedAt:   timestamptz(event.CreatedAt),
 		UpdatedAt:   timestamptz(event.UpdatedAt),
 	})
@@ -50,7 +52,16 @@ func (r *EventRepository) List(ctx context.Context) ([]domain.Event, error) {
 
 	events := make([]domain.Event, 0, len(rows))
 	for _, row := range rows {
-		events = append(events, eventFromRow(row))
+		events = append(events, domain.Event{
+			ID:          row.ID,
+			UserID:      row.UserID,
+			Name:        row.Name,
+			Description: row.Description,
+			Mode:        row.Mode,
+			Date:        timeFromTimestamptz(row.Date),
+			CreatedAt:   timeFromTimestamptz(row.CreatedAt),
+			UpdatedAt:   timeFromTimestamptz(row.UpdatedAt),
+		})
 	}
 
 	return events, nil
@@ -61,6 +72,7 @@ func (r *EventRepository) Update(ctx context.Context, event domain.Event) (domai
 		ID:          event.ID,
 		Name:        event.Name,
 		Description: event.Description,
+		Mode:        event.Mode,
 		UpdatedAt:   timestamptz(event.UpdatedAt),
 	})
 	if err != nil {
@@ -87,12 +99,14 @@ func (r *EventRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func eventFromRow(row gen.Event) domain.Event {
+func eventFromRow(row gen.GetEventByIDRow) domain.Event {
 	return domain.Event{
 		ID:          row.ID,
 		UserID:      row.UserID,
 		Name:        row.Name,
 		Description: row.Description,
+		Mode:        row.Mode,
+		Date:        timeFromTimestamptz(row.Date),
 		CreatedAt:   timeFromTimestamptz(row.CreatedAt),
 		UpdatedAt:   timeFromTimestamptz(row.UpdatedAt),
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -29,6 +30,7 @@ const (
 	shutdownTimeout       = 10 * time.Second
 	providerTimeout       = 15 * time.Second
 	userTokenCleanupEvery = time.Hour
+	qrTokenCleanupEvery   = 10 * time.Minute
 )
 
 func main() {
@@ -44,12 +46,28 @@ func main() {
 			provideTrustedProxies,
 			fx.Annotate(provideRateLimiter, fx.As(new(port.RateLimiter))),
 			provideAuthConfig,
-			provideRepositories,
+			provideQRConfig,
+			providePool,
+			fx.Annotate(postgres.NewEventRepository, fx.As(new(port.EventRepository))),
+			fx.Annotate(postgres.NewUserRepository, fx.As(new(port.UserRepository))),
+			fx.Annotate(postgres.NewUserTokenRepository, fx.As(new(port.UserTokenRepository))),
+			fx.Annotate(postgres.NewAgentRepository, fx.As(new(port.AgentRepository))),
+			fx.Annotate(postgres.NewAttendeeRepository, fx.As(new(port.AttendeeRepository))),
+			fx.Annotate(postgres.NewConnectionRepository, fx.As(new(port.ConnectionRepository))),
+			fx.Annotate(postgres.NewConnectionRequestRepository, fx.As(new(port.ConnectionRequestRepository))),
+			fx.Annotate(postgres.NewQRTokenRepository, fx.As(new(port.QRTokenRepository))),
+			fx.Annotate(postgres.NewScanRepository, fx.As(new(port.ScanRepository))),
 			usecase.NewAuthService,
 			usecase.NewEventService,
+			usecase.NewAttendanceService,
+			usecase.NewConnectionService,
+			usecase.NewQRService,
 			handler.NewEventHandler,
 			handler.NewAuthHandler,
 			handler.NewAgentHandler,
+			handler.NewAttendanceHandler,
+			handler.NewConnectionHandler,
+			handler.NewQRHandler,
 			middleware.NewAuth,
 			controller.NewRouter,
 			newHTTPServer,
@@ -57,6 +75,7 @@ func main() {
 		fx.Invoke(
 			func(*http.Server) {},
 			provideUserTokenCleanup,
+			provideQRTokenCleanup,
 		),
 	).Run()
 }
@@ -87,8 +106,11 @@ func provideTrustedProxies(cfg config.Config) []*net.IPNet {
 
 func provideRateLimiter(cfg config.Config) *memory.RateLimiter {
 	return memory.NewRateLimiter(map[string]memory.Limit{
-		usecase.ActionCreateEvent:  {Max: cfg.RateLimitEventsPerDay, Window: 24 * time.Hour},
-		usecase.ActionAuthExchange: {Max: cfg.RateLimitExchangePerHour, Window: time.Hour},
+		usecase.ActionCreateEvent:       {Max: cfg.RateLimitEventsPerDay, Window: 24 * time.Hour},
+		usecase.ActionAuthExchange:      {Max: cfg.RateLimitExchangePerHour, Window: time.Hour},
+		usecase.ActionRequestConnection: {Max: cfg.RateLimitConnectionsPerDay, Window: 24 * time.Hour},
+		usecase.ActionGenerateQR:        {Max: cfg.RateLimitQRPerMinute, Window: time.Minute},
+		usecase.ActionConsumeQR:         {Max: cfg.RateLimitQRScanPerMinute, Window: time.Minute},
 	})
 }
 
@@ -99,12 +121,33 @@ func provideAuthConfig(cfg config.Config) usecase.AuthConfig {
 	}
 }
 
+func provideQRConfig(cfg config.Config) usecase.QRConfig {
+	return usecase.QRConfig{TokenTTL: cfg.QRTokenTTL}
+}
+
 func provideUserTokenCleanup(lc fx.Lifecycle, tokens port.UserTokenRepository, log port.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			go cleanupExpiredTokens(ctx, tokens, log)
+
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			cancel()
+
+			return nil
+		},
+	})
+}
+
+func provideQRTokenCleanup(lc fx.Lifecycle, tokens port.QRTokenRepository, log port.Logger) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			go cleanupExpiredQRTokens(ctx, tokens, log)
 
 			return nil
 		},
@@ -133,16 +176,27 @@ func cleanupExpiredTokens(ctx context.Context, tokens port.UserTokenRepository, 
 	}
 }
 
-func provideRepositories(lc fx.Lifecycle, cfg config.Config, log port.Logger) (
-	port.EventRepository,
-	port.UserRepository,
-	port.UserTokenRepository,
-	port.AgentRepository,
-	error,
-) {
+func cleanupExpiredQRTokens(ctx context.Context, tokens port.QRTokenRepository, log port.Logger) {
+	ticker := time.NewTicker(qrTokenCleanupEvery)
+	defer ticker.Stop()
+
+	for {
+		if err := tokens.DeleteExpired(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
+			log.Error("expired qr token cleanup failed", port.Err(err))
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func providePool(lc fx.Lifecycle, cfg config.Config, log port.Logger) (*pgxpool.Pool, error) {
 	pool, err := postgres.Open(cfg.DatabaseURL)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	lc.Append(fx.Hook{
@@ -154,16 +208,12 @@ func provideRepositories(lc fx.Lifecycle, cfg config.Config, log port.Logger) (
 	})
 
 	if err := postgres.Migrate(pool); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 
 	log.Info("postgres storage ready")
 
-	return postgres.NewEventRepository(pool),
-		postgres.NewUserRepository(pool),
-		postgres.NewUserTokenRepository(pool),
-		postgres.NewAgentRepository(pool),
-		nil
+	return pool, nil
 }
 
 func newZapLogger(lc fx.Lifecycle, cfg config.Config) (*zap.Logger, error) {

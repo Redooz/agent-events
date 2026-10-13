@@ -38,23 +38,47 @@ Adding a component: write it against a `port` interface, provide the impl in `fx
 Two credentials, both opaque random tokens stored SHA-256 hashed (plaintext never persisted):
 
 - User token (`aeu_…`) — issued by `POST /api/v1/auth/exchange` after verifying a provider ID
-  token. Authorizes agent management via `middleware.Auth.RequireUser`; revoked by the user
-  through `DELETE /api/v1/auth/session` (logout).
-- Agent key (`aea_…`) — minted by users, revocable. Authorizes everything else via `RequireAgent`;
+  token. Authorizes agent management, connections, and attendance/QR routes via
+  `middleware.Auth.RequireUser`; revoked by the user through `DELETE /api/v1/auth/session` (logout).
+- Agent key (`aea_…`) — minted by users, revocable. Authorizes event CRUD via `RequireAgent`;
   requests act as "agent on behalf of user" (`usecase.Actor` carries UserID + AgentID).
+
+`middleware.Auth.RequireEither` dispatches on the credential prefix (`aea_`/`aeu_`) and accepts
+either; it guards `POST /api/v1/events/{id}/attend` so users can join events themselves or have an
+agent join for them. `actorFrom` in the handler layer turns either identity into an `Actor`.
 
 Storage mode: Postgres is required (`DATABASE_URL`; enforced in `config.Validate`), goose
 migrations run automatically at startup. The dev verifier that accepts any token
 string as identity is allowed only in `ENV=development` (wired via `oidc.New`'s `allowDevVerifier`);
 every other env requires at least one `*_CLIENT_ID` (enforced in `config.Validate` and at startup).
 Expired user tokens are purged by an hourly cleanup loop (`provideUserTokenCleanup` in `main.go`),
-not on sign-in. `X-Forwarded-For` is trusted only when the direct peer is in `TRUSTED_PROXIES`.
+not on sign-in; expired QR tokens likewise (`provideQRTokenCleanup`, every 10 minutes).
+`X-Forwarded-For` is trusted only when the direct peer is in `TRUSTED_PROXIES`.
 
 Anti-abuse: one user per provider identity (UNIQUE constraint), per-user event-create limit,
 per-IP exchange limit, agent cap per user (counts active agents only — revoking frees a slot,
-enforced atomically in `AgentRepository.CreateIfUnderLimit`). Rate-limiter actions are registered in
+enforced atomically in `AgentRepository.CreateIfUnderLimit`), QR generate/scan per-minute and
+connection-request per-day limits. Rate-limiter actions are registered in
 `provideRateLimiter` in `main.go` — add new actions there. The rate limiter is in-memory: single
 instance only, swap for Redis when running multiple replicas.
+
+## Events & connections model
+
+Events carry `mode` (`online`/`onsite`) and `date`, both required at creation. Mode is
+owner-editable via PUT only while `now < date` (`Event.ModeEditable`); `date` itself is immutable.
+
+One connection per user pair, globally (`connections` has UNIQUE(user_a_id, user_b_id) with
+`user_a_id < user_b_id`; normalize with `domain.ConnectionPair`, map 23505 to
+`domain.ErrAlreadyConnected` via `asUniqueViolation`). Invariants to preserve:
+
+- **Online events** — mutual consent via `connection_requests`: pending → accept/decline; a new
+  request matching a pending request in the opposite direction auto-accepts. Off-limits for
+  onsite events (and vice versa: onsite never creates requests).
+- **Onsite events** — dynamic QR: `aeq_` tokens, hash-only rows in `event_qr_tokens`, short TTL
+  (`QR_TOKEN_TTL_SECONDS`), single-use (atomic `MarkUsed` execrows check). Generate and scan are
+  both gated to the event's UTC day (`sameUTCDay`) and to attendees. Scans are one-directional
+  rows; a connection forms only when the reciprocal scan exists (`ScanStatusPending`/`Connected`).
+- Attendee rosters expose emails but are attendee-only (`Forbidden` otherwise).
 
 ## Conventions
 
@@ -83,6 +107,13 @@ instance only, swap for Redis when running multiple replicas.
 - `POST /api/v1/agents`, `GET /api/v1/agents`, `DELETE /api/v1/agents/{id}` — agent management (user token)
 - CRUD under `/api/v1/events` (`POST/GET /`, `GET/PUT/DELETE /{id}`) — agent key; update/delete
   restricted to the event's user
+- `POST /api/v1/events/{id}/attend` — attend (user token or agent key)
+- `GET /api/v1/events/{id}/attendees` — roster (user token, attendee-only)
+- `POST /api/v1/events/{id}/qr`, `POST /api/v1/events/{id}/qr/scan` — onsite QR generate/scan
+  (user token, attendee-only)
+- `POST /api/v1/connection-requests`, `GET /api/v1/connection-requests`,
+  `POST /api/v1/connection-requests/{id}/accept|decline`, `GET /api/v1/connections` — online
+  connections (user token)
 
 ## Maintenance
 
