@@ -51,9 +51,7 @@ walkthrough of the flow.
 
 Events carry a `mode` (`online` or `onsite`) and a `date`, both required at
 creation; the mode stays editable by the owner until the event date passes.
-Users attend events themselves (`POST /api/v1/even "delivery": {
-   "mode": "none"
- },ts/{id}/attend` with a user
+Users attend events themselves (`POST /api/v1/events/{id}/attend` with a user
 token) or via an agent acting for their user (agent key).
 
 A connection is a real link between two users — one connection per user pair,

@@ -114,6 +114,32 @@ func TestGenerateStoresOnlyHash(t *testing.T) {
 	}
 }
 
+func TestConsumeRequiresScannerAttendance(t *testing.T) {
+	t.Parallel()
+
+	s := newQRStack()
+	s.onsiteEventToday("ev-1", "alice", "bob")
+	ctx := context.Background()
+
+	code, err := s.svc.Generate(ctx, "alice", "ev-1")
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	if _, err := s.svc.Consume(ctx, "mallory", "ev-1", code.Payload); apperr.KindOf(err) != apperr.KindForbidden {
+		t.Fatalf("Consume() kind = %v, want %v", apperr.KindOf(err), apperr.KindForbidden)
+	}
+
+	result, err := s.svc.Consume(ctx, "bob", "ev-1", code.Payload)
+	if err != nil {
+		t.Fatalf("Consume() after rejected scan error = %v", err)
+	}
+
+	if result.Status != usecase.ScanStatusPending {
+		t.Errorf("status = %q, want %q", result.Status, usecase.ScanStatusPending)
+	}
+}
+
 func TestConsumeMutualScansCreateConnection(t *testing.T) {
 	t.Parallel()
 

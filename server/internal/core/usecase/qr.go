@@ -149,6 +149,16 @@ func (s *QRService) Consume(ctx context.Context, scannerID, eventID, payload str
 		return ScanResult{}, apperr.Invalid("QR codes are only available on the event day")
 	}
 
+	isAttendee, err := s.attendees.IsAttendee(ctx, eventID, scannerID)
+	if err != nil {
+		s.logger.Error("failed to check attendance for qr scan", port.Err(err), port.Str("event_id", eventID))
+		return ScanResult{}, apperr.Wrap(err, "could not scan QR code")
+	}
+
+	if !isAttendee {
+		return ScanResult{}, apperr.Forbidden("only attendees can scan QR codes")
+	}
+
 	token, err := s.tokens.GetByHash(ctx, HashToken(payload))
 	switch {
 	case errors.Is(err, domain.ErrQRTokenNotFound):

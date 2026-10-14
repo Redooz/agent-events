@@ -111,36 +111,40 @@ func (s *ConnectionService) Request(ctx context.Context, userID, eventID, toUser
 	now := time.Now().UTC()
 
 	for _, request := range existing {
-		if request.FromUserID == userID && request.ToUserID == toUserID {
-			return RequestConnectionResult{}, apperr.Invalid("connection request already exists")
+		if request.Status != domain.RequestStatusPending || request.FromUserID != toUserID || request.ToUserID != userID {
+			continue
 		}
 
-		if request.Status == domain.RequestStatusPending {
-			ok, err := s.requests.MarkAccepted(ctx, request.ID, now)
-			if err != nil {
-				s.logger.Error("failed to accept reciprocal request", port.Err(err), port.Str("request_id", request.ID))
-				return RequestConnectionResult{}, apperr.Wrap(err, "could not request connection")
-			}
+		ok, err := s.requests.MarkAccepted(ctx, request.ID, now)
+		if err != nil {
+			s.logger.Error("failed to accept reciprocal request", port.Err(err), port.Str("request_id", request.ID))
+			return RequestConnectionResult{}, apperr.Wrap(err, "could not request connection")
+		}
 
-			if !ok {
-				return RequestConnectionResult{}, apperr.Invalid("connection request is no longer pending")
-			}
+		if !ok {
+			return RequestConnectionResult{}, apperr.Invalid("connection request is no longer pending")
+		}
 
-			connection, err := s.ConnectPair(ctx, eventID, userID, toUserID, domain.ConnectionMethodOnline)
-			if err != nil {
-				return RequestConnectionResult{}, err
-			}
+		connection, err := s.ConnectPair(ctx, eventID, userID, toUserID, domain.ConnectionMethodOnline)
+		if err != nil {
+			return RequestConnectionResult{}, err
+		}
 
-			accepted := request
-			accepted.Status = domain.RequestStatusAccepted
-			accepted.RespondedAt = now
+		accepted := request
+		accepted.Status = domain.RequestStatusAccepted
+		accepted.RespondedAt = now
 
-			s.logger.Info("reciprocal connection request auto-accepted",
-				port.Str("event_id", eventID),
-				port.Str("request_id", request.ID),
-			)
+		s.logger.Info("reciprocal connection request auto-accepted",
+			port.Str("event_id", eventID),
+			port.Str("request_id", request.ID),
+		)
 
-			return RequestConnectionResult{Request: accepted, Connection: &connection}, nil
+		return RequestConnectionResult{Request: accepted, Connection: &connection}, nil
+	}
+
+	for _, request := range existing {
+		if request.Status == domain.RequestStatusPending && request.FromUserID == userID && request.ToUserID == toUserID {
+			return RequestConnectionResult{}, apperr.Invalid("connection request already exists")
 		}
 	}
 

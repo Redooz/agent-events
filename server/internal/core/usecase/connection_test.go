@@ -156,6 +156,40 @@ func TestReciprocalRequestAutoAccepts(t *testing.T) {
 	}
 }
 
+func TestReciprocalRequestAutoAcceptsAfterDeclinedSameDirection(t *testing.T) {
+	t.Parallel()
+
+	s := newConnectionStack()
+	s.onlineEvent("ev-1", "alice", "bob")
+	ctx := context.Background()
+
+	first, err := s.svc.Request(ctx, "alice", "ev-1", "bob")
+	if err != nil {
+		t.Fatalf("first Request() error = %v", err)
+	}
+
+	if err := s.svc.Decline(ctx, "bob", first.Request.ID); err != nil {
+		t.Fatalf("Decline() error = %v", err)
+	}
+
+	if _, err := s.svc.Request(ctx, "bob", "ev-1", "alice"); err != nil {
+		t.Fatalf("reciprocal Request() error = %v", err)
+	}
+
+	result, err := s.svc.Request(ctx, "alice", "ev-1", "bob")
+	if err != nil {
+		t.Fatalf("Request() after declined same-direction error = %v", err)
+	}
+
+	if result.Connection == nil {
+		t.Fatal("declined same-direction request shadowed the pending reciprocal request")
+	}
+
+	if result.Request.Status != domain.RequestStatusAccepted {
+		t.Errorf("request status = %q, want %q", result.Request.Status, domain.RequestStatusAccepted)
+	}
+}
+
 func TestAcceptConnectionCreatesConnection(t *testing.T) {
 	t.Parallel()
 
